@@ -1263,23 +1263,39 @@ def editor_portals():
 @app.route("/editor/genres", methods=["GET"])  # Keep old route for backward compatibility
 @authorise
 def editor_genres():
-    """Get list of unique genres for filter dropdown."""
+    """Get list of unique genres for filter dropdown, optionally filtered by portal."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT DISTINCT COALESCE(NULLIF(custom_genre, ''), genre) as genre
-            FROM channels
-            WHERE COALESCE(NULLIF(custom_genre, ''), genre) IS NOT NULL 
-                AND COALESCE(NULLIF(custom_genre, ''), genre) != ''
-                AND COALESCE(NULLIF(custom_genre, ''), genre) != 'None'
-            ORDER BY genre
-        """)
-        
+
+        # Check if portal filter is provided
+        portal = flask.request.args.get('portal', '').strip()
+
+        if portal:
+            # Filter genres by portal
+            cursor.execute("""
+                SELECT DISTINCT COALESCE(NULLIF(custom_genre, ''), genre) as genre
+                FROM channels
+                WHERE COALESCE(NULLIF(custom_genre, ''), genre) IS NOT NULL
+                    AND COALESCE(NULLIF(custom_genre, ''), genre) != ''
+                    AND COALESCE(NULLIF(custom_genre, ''), genre) != 'None'
+                    AND portal = ?
+                ORDER BY genre
+            """, (portal,))
+        else:
+            # Return all genres if no portal filter
+            cursor.execute("""
+                SELECT DISTINCT COALESCE(NULLIF(custom_genre, ''), genre) as genre
+                FROM channels
+                WHERE COALESCE(NULLIF(custom_genre, ''), genre) IS NOT NULL
+                    AND COALESCE(NULLIF(custom_genre, ''), genre) != ''
+                    AND COALESCE(NULLIF(custom_genre, ''), genre) != 'None'
+                ORDER BY genre
+            """)
+
         genres = [row['genre'] for row in cursor.fetchall()]
         conn.close()
-        
+
         return flask.jsonify({"genres": genres})
     except Exception as e:
         logger.error(f"Error in editor_genres: {e}")
