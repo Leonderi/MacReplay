@@ -578,8 +578,7 @@ def editorSave():
 
     savePortals(portals)
     logger.info("Playlist config saved!")
-    flash("Playlist config saved!", "success")
-    return redirect("/editor", code=302)
+    return jsonify({"success": True, "message": "Playlist config saved!"})
 
 @app.route("/editor/reset", methods=["POST"])
 @authorise

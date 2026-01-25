@@ -1482,13 +1482,11 @@ def editorSave():
     except Exception as e:
         conn.rollback()
         logger.error(f"Error saving channel edits: {e}")
-        flash(f"Error saving changes: {e}", "danger")
-        return redirect("/editor", code=302)
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         conn.close()
-    
-    flash("Playlist config saved!", "success")
-    return redirect("/editor", code=302)
+
+    return jsonify({"success": True, "message": "Playlist config saved!"})
 
 
 @app.route("/api/editor/reset", methods=["POST"])

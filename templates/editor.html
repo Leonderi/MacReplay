@@ -241,13 +241,48 @@
     }
 
     function save() {
-        document.getElementById("enabledEdits").value = JSON.stringify(enabledEdits);
-        document.getElementById("numberEdits").value = JSON.stringify(numberEdits);
-        document.getElementById("nameEdits").value = JSON.stringify(nameEdits);
-        document.getElementById("genreEdits").value = JSON.stringify(genreEdits);
-        document.getElementById("epgEdits").value = JSON.stringify(epgEdits);
-        document.getElementById("fallbackEdits").value = JSON.stringify(fallbackEdits);
-        document.getElementById("save edits").submit();
+        // Prepare form data
+        const formData = new FormData();
+        formData.append('enabledEdits', JSON.stringify(enabledEdits));
+        formData.append('numberEdits', JSON.stringify(numberEdits));
+        formData.append('nameEdits', JSON.stringify(nameEdits));
+        formData.append('genreEdits', JSON.stringify(genreEdits));
+        formData.append('epgEdits', JSON.stringify(epgEdits));
+        formData.append('fallbackEdits', JSON.stringify(fallbackEdits));
+
+        // Show loading indicator
+        var saveBtn = $('.dt-button:contains("Save")').first();
+        var originalText = saveBtn.html();
+        saveBtn.html('<i class="fa fa-spinner fa-spin"></i> Saving...').prop('disabled', true);
+
+        // Send AJAX request
+        fetch('/editor/save', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message || 'Playlist config saved!');
+                // Clear edit arrays
+                enabledEdits = [];
+                numberEdits = [];
+                nameEdits = [];
+                genreEdits = [];
+                epgEdits = [];
+                fallbackEdits = [];
+                // Reload table data without losing filters
+                dataTable.ajax.reload(null, false);
+            } else {
+                alert('Error: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            alert('Error saving changes: ' + error);
+        })
+        .finally(() => {
+            saveBtn.html(originalText).prop('disabled', false);
+        });
     }
 
     var player = document.getElementById("player")
