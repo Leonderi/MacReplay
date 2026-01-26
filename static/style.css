@@ -150,3 +150,113 @@ table.dataTable thead th {
     background-color: #664d03 !important;
     color: #fff !important;
 }
+
+/* ===== Tom Select / Filter Styles ===== */
+.ts-wrapper {
+    min-width: 200px;
+}
+
+.ts-wrapper .ts-control {
+    background-color: var(--bs-body-bg);
+    border-color: var(--bs-border-color);
+    color: var(--bs-body-color);
+}
+
+.ts-wrapper .ts-dropdown {
+    background-color: var(--bs-body-bg);
+    border-color: var(--bs-border-color);
+    max-height: 400px;
+}
+
+.ts-wrapper .ts-dropdown .option {
+    color: var(--bs-body-color);
+}
+
+.ts-wrapper .ts-dropdown .option:hover,
+.ts-wrapper .ts-dropdown .active {
+    background-color: var(--bs-primary);
+    color: white;
+}
+
+.ts-wrapper .item {
+    background-color: var(--bs-primary);
+    color: white;
+}
+
+.ts-wrapper .optgroup-header {
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-emphasis-color);
+    padding: 6px 10px;
+    font-size: 0.85em;
+    font-weight: 600;
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.ts-wrapper .optgroup {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.ts-wrapper .optgroup:last-child {
+    border-bottom: none;
+}
+
+/* Single-select Tom Select - no colored background and fixed height */
+.ts-wrapper.single .ts-control {
+    height: 38px;
+    min-height: 38px;
+    max-height: 38px;
+    display: flex;
+    align-items: center;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    overflow: hidden;
+}
+
+.ts-wrapper.single .ts-control > .item {
+    background-color: transparent !important;
+    color: var(--bs-body-color) !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    max-width: calc(100% - 30px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ts-wrapper.single .ts-control > input {
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+}
+
+/* Filter card styling - light gray background */
+.filter-card {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+}
+
+/* Consistent border styling for all filter inputs */
+.filter-card .ts-wrapper .ts-control {
+    border: 1px solid #ced4da;
+    border-radius: 0.375rem;
+}
+
+/* Custom search input to match Tom Select style */
+#searchFilter {
+    background-color: var(--bs-body-bg);
+    border: 1px solid #ced4da;
+    border-radius: 0.375rem;
+    color: var(--bs-body-color);
+    height: 38px;
+}
+
+#searchFilter:focus {
+    border-color: #86b7fe;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+    outline: none;
+}
+
+#searchFilter::placeholder {
+    color: var(--bs-secondary-color);
+}

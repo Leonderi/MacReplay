@@ -4,6 +4,8 @@
 <!-- DataTables CSS -->
 <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
 <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.bootstrap5.min.css">
+<!-- Tom Select for searchable multi-select -->
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 {% endblock %}
 
 {% block content %}
@@ -17,32 +19,32 @@
 
 <div class="container-fluid p-lg-5">
     <!-- Filter Controls -->
-    <div class="row mb-3">
-        <div class="col-md-3">
-            <label for="portalFilter" class="form-label text-light">Portal</label>
-            <select class="form-select" id="portalFilter">
-                <option value="">All Portals</option>
-            </select>
-        </div>
-        <div class="col-md-3">
-            <label for="genreFilter" class="form-label text-light">Genre</label>
-            <select class="form-select" id="genreFilter">
-                <option value="">All Genres</option>
-            </select>
-        </div>
-        <div class="col-md-3">
-            <label for="duplicateFilter" class="form-label text-light">Duplicates</label>
-            <select class="form-select" id="duplicateFilter">
-                <option value="">All Channels</option>
-                <option value="enabled_only">Enabled Duplicates Only</option>
-                <option value="unique_only">Unique Only</option>
-            </select>
-        </div>
-        <div class="col-md-3">
-            <label class="form-label text-light">&nbsp;</label>
-            <button class="btn btn-warning w-100" onclick="deactivateDuplicates()" title="Deactivate enabled duplicate channels (keeps first enabled occurrence)">
-                <i class="fas fa-trash"></i> Deactivate Duplicates
-            </button>
+    <div class="card mb-3 filter-card">
+        <div class="card-body py-3">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                    <label for="portalFilter" class="form-label small mb-1">Portal</label>
+                    <select id="portalFilter" multiple placeholder="All Portals...">
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="groupFilter" class="form-label small mb-1">Group</label>
+                    <select id="groupFilter" multiple placeholder="All Groups...">
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="duplicateFilter" class="form-label small mb-1">Duplicates</label>
+                    <select id="duplicateFilter">
+                        <option value="">All Channels</option>
+                        <option value="enabled_only">Enabled Duplicates Only</option>
+                        <option value="unique_only">Unique Only</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="searchFilter" class="form-label small mb-1">Search</label>
+                    <input type="text" id="searchFilter" class="form-control" placeholder="Filter channels...">
+                </div>
+            </div>
         </div>
     </div>
 
@@ -56,7 +58,7 @@
                 </th>
                 <th>Play</th>
                 <th>Name</th>
-                <th>Genre</th>
+                <th>Group</th>
                 <th>Number</th>
                 <th>EPG ID</th>
                 <th>Fallback For</th>
@@ -71,7 +73,7 @@
         <input type="text" id="enabledEdits" name="enabledEdits" value="">
         <input type="text" id="numberEdits" name="numberEdits" value="">
         <input type="text" id="nameEdits" name="nameEdits" value="">
-        <input type="text" id="genreEdits" name="genreEdits" value="">
+        <input type="text" id="groupEdits" name="groupEdits" value="">
         <input type="text" id="epgEdits" name="epgEdits" value="">
         <input type="text" id="fallbackEdits" name="fallbackEdits" value="">
     </form>
@@ -112,6 +114,8 @@
 <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.bootstrap5.min.js"></script>
+<!-- Tom Select for searchable multi-select -->
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 
 <script>
     // Toast Notification Functions
@@ -154,7 +158,7 @@
     var enabledEdits = [];
     var numberEdits = [];
     var nameEdits = [];
-    var genreEdits = [];
+    var groupEdits = [];
     var epgEdits = [];
     var fallbackEdits = [];
     var dataTable;
@@ -196,12 +200,12 @@
         nameEdits.push(j);
     }
 
-    function editCustomGenre(ele) {
+    function editCustomGroup(ele) {
         var p = ele.getAttribute('data-portal');
         var i = ele.getAttribute('data-channelId');
         var c = ele.value;
         var j = { "portal": p, "channel id": i, "custom genre": c };
-        genreEdits.push(j);
+        groupEdits.push(j);
     }
 
     function editCustomEpgId(ele) {
@@ -225,7 +229,7 @@
         formData.append('enabledEdits', JSON.stringify(enabledEdits));
         formData.append('numberEdits', JSON.stringify(numberEdits));
         formData.append('nameEdits', JSON.stringify(nameEdits));
-        formData.append('genreEdits', JSON.stringify(genreEdits));
+        formData.append('groupEdits', JSON.stringify(groupEdits));
         formData.append('epgEdits', JSON.stringify(epgEdits));
         formData.append('fallbackEdits', JSON.stringify(fallbackEdits));
 
@@ -246,7 +250,7 @@
                 enabledEdits = [];
                 numberEdits = [];
                 nameEdits = [];
-                genreEdits = [];
+                groupEdits = [];
                 epgEdits = [];
                 fallbackEdits = [];
                 // Reload table data without losing filters
@@ -303,43 +307,140 @@
         });
     };
 
+    // Tom Select instances
+    let portalSelect, groupSelect, duplicateSelect;
+    // Store all groups data for dynamic filtering
+    let allGroupsData = [];
+
+    // Initialize Tom Select dropdowns
+    function initializeFilters() {
+        // Portal filter with Tom Select
+        portalSelect = new TomSelect('#portalFilter', {
+            plugins: ['remove_button', 'clear_button'],
+            placeholder: 'All Portals...',
+            allowEmptyOption: true,
+            closeAfterSelect: false,
+            hidePlaceholder: true,
+            maxOptions: null,
+            onChange: function() {
+                updateGroupFilter();
+                if (dataTable) dataTable.ajax.reload();
+            }
+        });
+
+        // Group filter with Tom Select (with optgroup support)
+        groupSelect = new TomSelect('#groupFilter', {
+            plugins: ['remove_button', 'clear_button'],
+            placeholder: 'All Groups...',
+            allowEmptyOption: true,
+            closeAfterSelect: false,
+            hidePlaceholder: true,
+            optgroupField: 'portal',
+            optgroupLabelField: 'portal',
+            optgroupValueField: 'portal',
+            lockOptgroupOrder: true,
+            maxOptions: null,
+            render: {
+                optgroup_header: function(data, escape) {
+                    return '<div class="optgroup-header">' + escape(data.portal) + '</div>';
+                }
+            },
+            onChange: function() {
+                if (dataTable) dataTable.ajax.reload();
+            }
+        });
+
+        // Duplicate filter with Tom Select (single-select)
+        duplicateSelect = new TomSelect('#duplicateFilter', {
+            placeholder: 'All Channels',
+            allowEmptyOption: true,
+            maxOptions: null,
+            onChange: function() {
+                if (dataTable) dataTable.ajax.reload();
+            }
+        });
+
+        // Custom search input - connect to DataTable
+        let searchTimeout;
+        document.getElementById('searchFilter').addEventListener('input', function(e) {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(function() {
+                if (dataTable) dataTable.search(e.target.value).draw();
+            }, 300);
+        });
+
+        // Populate the dropdowns
+        populateFilters();
+    }
+
+    // Update group filter based on selected portals
+    function updateGroupFilter() {
+        const selectedPortals = portalSelect.getValue();
+
+        // Clear current options
+        groupSelect.clear();
+        groupSelect.clearOptions();
+
+        // Filter groups based on selected portals
+        let filteredGroups = allGroupsData;
+        if (selectedPortals && selectedPortals.length > 0) {
+            filteredGroups = allGroupsData.filter(group => selectedPortals.includes(group.portal));
+        }
+
+        // Re-add filtered groups
+        filteredGroups.forEach(group => {
+            groupSelect.addOptionGroup(group.portal, { portal: group.portal });
+            group.genres.forEach(genre => {
+                groupSelect.addOption({ value: genre, text: genre, portal: group.portal });
+            });
+        });
+    }
+
     // Populate filter dropdowns
     function populateFilters() {
         // Populate portals dropdown
         fetch('/editor/portals')
             .then(res => res.json())
             .then(data => {
-                const select = document.getElementById('portalFilter');
                 data.portals.forEach(portal => {
-                    const option = document.createElement('option');
-                    option.value = portal;
-                    option.textContent = portal;
-                    select.appendChild(option);
+                    portalSelect.addOption({ value: portal, text: portal });
                 });
             })
             .catch(err => console.error('Error loading portals:', err));
 
-        // Populate genres dropdown
-        fetch('/editor/genres')
+        // Populate groups dropdown (grouped by portal)
+        fetch('/editor/genres-grouped')
             .then(res => res.json())
             .then(data => {
-                const select = document.getElementById('genreFilter');
-                data.genres.forEach(genre => {
-                    const option = document.createElement('option');
-                    option.value = genre;
-                    option.textContent = genre;
-                    select.appendChild(option);
+                // Store all groups data for dynamic filtering
+                allGroupsData = data.genres_by_portal;
+
+                // Add optgroups for each portal
+                data.genres_by_portal.forEach(group => {
+                    groupSelect.addOptionGroup(group.portal, { portal: group.portal });
+                    group.genres.forEach(genre => {
+                        groupSelect.addOption({ value: genre, text: genre, portal: group.portal });
+                    });
                 });
             })
-            .catch(err => console.error('Error loading genres:', err));
+            .catch(err => console.error('Error loading groups:', err));
+    }
+
+    // Helper to get selected values as comma-separated string
+    function getFilterValues(selectInstance) {
+        const values = selectInstance.getValue();
+        if (Array.isArray(values)) {
+            return values.join(',');
+        }
+        return values || '';
     }
 
     $(document).ready(function () {
-        // Populate filter dropdowns
-        populateFilters();
+        // Initialize Tom Select filter dropdowns
+        initializeFilters();
 
         dataTable = $('#table').DataTable({
-            dom: "<'row m-1'<'col-auto'B><'col-auto ms-auto'f><'col-auto'l>>" +
+            dom: "<'row m-1'<'col-auto'B><'col-auto ms-auto'l>>" +
                 "<'row'<'col-12'tr>>" +
                 "<'row mb-1 mb-lg-0'<'col-auto text-light'i><'col-auto ms-auto'p>>",
             serverSide: true,
@@ -391,6 +492,14 @@
                                 document.getElementById('reset').submit();
                             }
                         }
+                    },
+                    {
+                        text: '<i class="fas fa-trash"></i> Deactivate Duplicates',
+                        titleAttr: 'Deactivate enabled duplicate channels (keeps first enabled occurrence)',
+                        className: "btn btn-warning",
+                        action: function () {
+                            deactivateDuplicates();
+                        }
                     }
                 ],
             },
@@ -399,10 +508,10 @@
                 "dataType": "json",
                 "contentType": "application/json",
                 "data": function(d) {
-                    // Add custom filter parameters
-                    d.portal = $('#portalFilter').val();
-                    d.genre = $('#genreFilter').val();
-                    d.duplicates = $('#duplicateFilter').val();
+                    // Add custom filter parameters (comma-separated for multi-select)
+                    d.portal = getFilterValues(portalSelect);
+                    d.group = getFilterValues(groupSelect);
+                    d.duplicates = duplicateSelect ? duplicateSelect.getValue() : '';
                 }
             },
             columns: [
@@ -474,7 +583,7 @@
                                 type="text" \
                                 class="form-control" \
                                 style="width: 100%;" \
-                                onchange="editCustomGenre(this)" \
+                                onchange="editCustomGroup(this)" \
                                 data-portal="' + row.portal + '" \
                                 data-channelId="' + row.channelId + '" \
                                 placeholder="' + row.genre + '" \
@@ -532,11 +641,6 @@
             ],
         });
 
-        // Add filter change event handlers
-        $('#portalFilter, #genreFilter, #duplicateFilter').on('change', function() {
-            dataTable.ajax.reload();
-        });
-        
     });
     
     // Function to deactivate duplicate enabled channels

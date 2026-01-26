@@ -1133,7 +1133,7 @@ def editor_data():
         
         # Get custom filter parameters
         portal_filter = request.args.get('portal', default='')
-        genre_filter = request.args.get('genre', default='')
+        group_filter = request.args.get('group', default='')
         duplicate_filter = request.args.get('duplicates', default='')
         
         # Map column indices to database columns
@@ -1164,9 +1164,9 @@ def editor_data():
                 base_query += f" AND portal_name IN ({placeholders})"
                 params.extend(portal_values)
 
-        # Add genre filter (check both custom_genre and genre, supports multiple values)
-        if genre_filter:
-            genre_values = [g.strip() for g in genre_filter.split(',') if g.strip()]
+        # Add group filter (check both custom_genre and genre, supports multiple values)
+        if group_filter:
+            genre_values = [g.strip() for g in group_filter.split(',') if g.strip()]
             if genre_values:
                 placeholders = ','.join(['?'] * len(genre_values))
                 base_query += f" AND (COALESCE(NULLIF(custom_genre, ''), genre) IN ({placeholders}))"
@@ -1559,7 +1559,7 @@ def editorSave():
     enabledEdits = json.loads(request.form["enabledEdits"])
     numberEdits = json.loads(request.form["numberEdits"])
     nameEdits = json.loads(request.form["nameEdits"])
-    genreEdits = json.loads(request.form["genreEdits"])
+    groupEdits = json.loads(request.form["groupEdits"])
     epgEdits = json.loads(request.form["epgEdits"])
     fallbackEdits = json.loads(request.form["fallbackEdits"])
     
@@ -1604,8 +1604,8 @@ def editorSave():
                 WHERE portal = ? AND channel_id = ?
             ''', (custom_name, portal, channel_id))
         
-        # Process custom genre edits
-        for edit in genreEdits:
+        # Process custom group edits
+        for edit in groupEdits:
             portal = edit["portal"]
             channel_id = edit["channel id"]
             custom_genre = edit["custom genre"]
