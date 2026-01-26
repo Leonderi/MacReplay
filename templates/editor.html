@@ -11,7 +11,7 @@
 <!-- Toast Notification -->
 <div class="toast-overlay" id="toastOverlay" onclick="hideNotification()"></div>
 <div class="toast-notification" id="toastNotification">
-    <div class="toast-icon"><i class="fa fa-check-circle"></i></div>
+    <div class="toast-icon"><i class="fas fa-check-circle"></i></div>
     <div class="toast-message" id="toastMessage">Message</div>
 </div>
 
@@ -41,7 +41,7 @@
         <div class="col-md-3">
             <label class="form-label text-light">&nbsp;</label>
             <button class="btn btn-warning w-100" onclick="deactivateDuplicates()" title="Deactivate enabled duplicate channels (keeps first enabled occurrence)">
-                <i class="fa fa-trash"></i> Deactivate Duplicates
+                <i class="fas fa-trash"></i> Deactivate Duplicates
             </button>
         </div>
     </div>
@@ -67,7 +67,7 @@
         </tbody>
     </table>
 
-    <form action="/editor/save" method="post" id="save edits" hidden>
+    <form action="/editor/save" method="post" id="save-edits" hidden>
         <input type="text" id="enabledEdits" name="enabledEdits" value="">
         <input type="text" id="numberEdits" name="numberEdits" value="">
         <input type="text" id="nameEdits" name="nameEdits" value="">
@@ -85,7 +85,7 @@
     </datalist>
 
     <!-- Video Modal -->
-    <div class="modal fade" id="videoModal" tabindex="-1" aria-labelledby="exampleModalLabel" aria-hidden="true">
+    <div class="modal fade" id="videoModal" tabindex="-1" aria-labelledby="channelLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
@@ -129,11 +129,11 @@
 
         // Set icon
         if (type === 'success') {
-            iconEl.className = 'fa fa-check-circle';
+            iconEl.className = 'fas fa-check-circle';
         } else if (type === 'error') {
-            iconEl.className = 'fa fa-times-circle';
+            iconEl.className = 'fas fa-times-circle';
         } else {
-            iconEl.className = 'fa fa-info-circle';
+            iconEl.className = 'fas fa-info-circle';
         }
 
         // Show
@@ -232,7 +232,7 @@
         // Show loading indicator
         var saveBtn = $('.dt-button:contains("Save")').first();
         var originalText = saveBtn.html();
-        saveBtn.html('<i class="fa fa-spinner fa-spin"></i> Saving...').prop('disabled', true);
+        saveBtn.html('<i class="fas fa-spinner fa-spin"></i> Saving...').prop('disabled', true);
 
         fetch('/editor/save', {
             method: 'POST',
@@ -367,7 +367,7 @@
             buttons: {
                 buttons: [
                     {
-                        text: '<i class="fa fa-save"></i> Save',
+                        text: '<i class="fas fa-save"></i> Save',
                         titleAttr: 'Save',
                         className: "btn btn-success",
                         action: function () {
@@ -375,7 +375,7 @@
                         }
                     },
                     {
-                        text: '<i class="fa fa-sync"></i> Refresh Channels',
+                        text: '<i class="fas fa-sync"></i> Refresh Channels',
                         titleAttr: 'Refresh channel list from portal',
                         className: "btn btn-primary",
                         action: function () {
@@ -383,7 +383,7 @@
                         }
                     },
                     {
-                        text: '<i class="fa fa-undo"></i> Reset',
+                        text: '<i class="fas fa-undo"></i> Reset',
                         titleAttr: 'Reset',
                         className: "btn btn-danger",
                         action: function () {
@@ -436,7 +436,7 @@
                             data-channelName="' + row.channelName + '" \
                             data-customChannelName="' + row.customChannelName + '" \
                             data-link="' + row.link + '">\
-                            <i class="fa fa-play"></i>\
+                            <i class="fas fa-play"></i>\
                         </button>'
                     }
                 },
@@ -532,15 +532,6 @@
             dataTable.ajax.reload();
         });
         
-        // Add sorting arrows to table headers (after table is initialized)
-        setTimeout(function() {
-            $('#table thead th').each(function() {
-                const $th = $(this);
-                if (!$th.hasClass('sorting_disabled')) {
-                    $th.append('<span class="sort-arrows" style="display: inline-block; margin-left: 5px; font-size: 0.85em; vertical-align: middle;"><span class="arrow-up">▲</span><span class="arrow-down">▼</span></span>');
-                }
-            });
-        }, 100);
     });
     
     // Function to deactivate duplicate enabled channels
@@ -578,7 +569,7 @@
         // Show loading indicator
         var btn = $('.btn-primary').first();
         var originalText = btn.html();
-        btn.html('<i class="fa fa-spinner fa-spin"></i> Refreshing...').prop('disabled', true);
+        btn.html('<i class="fas fa-spinner fa-spin"></i> Refreshing...').prop('disabled', true);
 
         fetch('{{ url_for("editorRefresh") }}', {
             method: 'POST',

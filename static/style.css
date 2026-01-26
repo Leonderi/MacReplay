@@ -11,21 +11,10 @@
 
 .card {
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    transition: transform 0.2s;
-}
-
-.card:hover {
-    transform: translateY(-2px);
 }
 
 .badge {
     font-size: 0.75em;
-}
-
-.btn-group-sm > .btn, .btn-sm {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.875rem;
-    border-radius: 0.2rem;
 }
 
 .table-responsive {
@@ -37,36 +26,10 @@
     height: 1rem;
 }
 
-.text-truncate {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 /* ===== Loading States ===== */
 .loading {
     opacity: 0.6;
     pointer-events: none;
-}
-
-/* ===== Animations ===== */
-.success-flash {
-    animation: fadeIn 0.5s;
-}
-
-.error-flash {
-    animation: shake 0.5s;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
-
-@keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-5px); }
-    75% { transform: translateX(5px); }
 }
 
 /* ===== Toast Notification ===== */
@@ -150,48 +113,10 @@
     margin-left: 5px;
 }
 
-/* Custom Sorting Indicators */
+/* DataTable header styles */
 table.dataTable thead th {
     cursor: pointer;
     user-select: none;
-}
-
-table.dataTable thead th.sorting,
-table.dataTable thead th.sorting_asc,
-table.dataTable thead th.sorting_desc {
-    background-image: none !important;
-    padding-right: 30px !important;
-}
-
-/* Add custom sorting arrows */
-.sort-arrows {
-    display: inline-block;
-    margin-left: 5px;
-    font-size: 0.85em;
-    vertical-align: middle;
-}
-
-.sort-arrows .arrow-up,
-.sort-arrows .arrow-down {
-    display: block;
-    line-height: 0.7em;
-    opacity: 0.25;
-    color: #999;
-    transition: all 0.2s ease;
-}
-
-/* Active state for ascending sort */
-table.dataTable.table-dark thead th.sorting_asc .sort-arrows .arrow-up {
-    opacity: 1 !important;
-    color: #ffc107 !important;
-    font-weight: bold;
-}
-
-/* Active state for descending sort */
-table.dataTable.table-dark thead th.sorting_desc .sort-arrows .arrow-down {
-    opacity: 1 !important;
-    color: #ffc107 !important;
-    font-weight: bold;
 }
 
 /* Table Warning Styles */
@@ -204,4 +129,3 @@ table.dataTable.table-dark thead th.sorting_desc .sort-arrows .arrow-down {
     background-color: #664d03 !important;
     color: #fff !important;
 }
-

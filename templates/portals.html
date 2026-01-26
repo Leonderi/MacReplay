@@ -45,10 +45,10 @@
                 </p>
             </div>
             <div class="card-footer">
-                <button class="btn btn-sm btn-outline-primary" onclick="editPortal('{{ portal_id }}')">
+                <button class="btn btn-sm btn-outline-primary" data-action="edit" data-portal-id="{{ portal_id }}">
                     <i class="fas fa-edit"></i> Edit
                 </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="deletePortal('{{ portal_id }}', '{{ portal.name }}')">
+                <button class="btn btn-sm btn-outline-danger" data-action="delete" data-portal-id="{{ portal_id }}" data-portal-name="{{ portal.name | e }}">
                     <i class="fas fa-trash"></i> Delete
                 </button>
             </div>
@@ -206,7 +206,7 @@ const portalsData = {{ portals | tojson }};
 function editPortal(portalId) {
     const portal = portalsData[portalId];
     if (!portal) return;
-    
+
     document.getElementById('edit_portal_id').value = portalId;
     document.getElementById('edit_enabled').checked = portal.enabled === 'true';
     document.getElementById('edit_name').value = portal.name;
@@ -215,15 +215,30 @@ function editPortal(portalId) {
     document.getElementById('edit_streams_per_mac').value = portal['streams per mac'];
     document.getElementById('edit_epg_offset').value = portal['epg offset'];
     document.getElementById('edit_proxy').value = portal.proxy || '';
-    
+
     new bootstrap.Modal(document.getElementById('editPortalModal')).show();
 }
 
 function deletePortal(portalId, portalName) {
     document.getElementById('delete_portal_id').value = portalId;
     document.getElementById('delete_portal_name').textContent = portalName;
-    
+
     new bootstrap.Modal(document.getElementById('deletePortalModal')).show();
 }
+
+// Event delegation for portal actions (safer than inline onclick)
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+
+    const action = btn.dataset.action;
+    const portalId = btn.dataset.portalId;
+
+    if (action === 'edit') {
+        editPortal(portalId);
+    } else if (action === 'delete') {
+        deletePortal(portalId, btn.dataset.portalName);
+    }
+});
 </script>
 {% endblock %} 
