@@ -33,6 +33,10 @@ epgCachePath = os.getenv("EPG_CACHE_PATH", os.path.join(DATA_DIR, "epg_cache.xml
 # EPG Refresh Interval: can be set via env (in hours), overrides settings if set
 EPG_REFRESH_INTERVAL_ENV = os.getenv("EPG_REFRESH_INTERVAL", None)
 
+# Channel Refresh Interval: can be set via env (in hours), overrides settings if set
+# Set to 0 to disable automatic channel refresh
+CHANNEL_REFRESH_INTERVAL_ENV = os.getenv("CHANNEL_REFRESH_INTERVAL", None)
+
 # Ensure directories exist
 os.makedirs(os.path.dirname(configFile), exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -177,6 +181,17 @@ def get_epg_refresh_interval():
     return float(getSettings().get("epg refresh interval", "0.5"))
 
 
+def get_channel_refresh_interval():
+    """Get channel refresh interval in hours. ENV variable takes precedence over settings.
+    Returns 0 to disable automatic refresh."""
+    if CHANNEL_REFRESH_INTERVAL_ENV is not None:
+        try:
+            return float(CHANNEL_REFRESH_INTERVAL_ENV)
+        except ValueError:
+            logger.warning(f"Invalid CHANNEL_REFRESH_INTERVAL env value: {CHANNEL_REFRESH_INTERVAL_ENV}, using settings")
+    return float(getSettings().get("channel refresh interval", "24"))
+
+
 def is_epg_cache_valid():
     """Check if EPG cache is still valid based on refresh interval."""
     global last_updated
@@ -221,6 +236,7 @@ defaultSettings = {
     "hls playlist size": "6",
     "ffmpeg timeout": "5",
     "epg refresh interval": "0.5",
+    "channel refresh interval": "24",
     "epg future hours": "24",
     "epg past hours": "2",
     "test streams": "true",
@@ -3087,6 +3103,41 @@ def start_epg_scheduler():
     logger.info("EPG background scheduler started!")
 
 
+def start_channel_scheduler():
+    """Start a background thread that periodically refreshes channel data from portals."""
+    def channel_refresh_loop():
+        while True:
+            try:
+                # Get refresh interval (env variable takes precedence over settings)
+                interval_hours = get_channel_refresh_interval()
+
+                # If interval is 0, disable automatic refresh
+                if interval_hours <= 0:
+                    logger.info("Channel scheduler: Automatic channel refresh disabled (interval = 0)")
+                    # Check again in 1 hour in case setting changes
+                    time.sleep(3600)
+                    continue
+
+                # Convert to seconds, minimum 60 seconds
+                interval_seconds = max(60, int(interval_hours * 3600))
+
+                logger.info(f"Channel scheduler: Next refresh in {interval_hours} hours ({interval_seconds} seconds)")
+                time.sleep(interval_seconds)
+
+                logger.info("Channel scheduler: Starting scheduled channel refresh...")
+                total = refresh_channels_cache()
+                logger.info(f"Channel scheduler: Channel refresh completed! {total} channels cached.")
+
+            except Exception as e:
+                logger.error(f"Channel scheduler error: {e}")
+                # Wait 5 minutes before retrying on error
+                time.sleep(300)
+
+    scheduler_thread = threading.Thread(target=channel_refresh_loop, daemon=True)
+    scheduler_thread.start()
+    logger.info("Channel background scheduler started!")
+
+
 def start_refresh():
     # Run refresh functions in separate threads
     # First refresh channels cache, then refresh lineup and xmltv
@@ -3123,8 +3174,11 @@ def start_refresh():
 
     # Start the EPG background scheduler
     start_epg_scheduler()
-    
-    
+
+    # Start the channel background scheduler
+    start_channel_scheduler()
+
+
 if __name__ == "__main__":
     config = loadConfig()
     
