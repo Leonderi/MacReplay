@@ -176,6 +176,67 @@
     border-color: var(--bs-border-color);
 }
 
+/* DataTables dark mode */
+[data-bs-theme="dark"] table.dataTable {
+    color: var(--bs-body-color) !important;
+}
+
+[data-bs-theme="dark"] table.dataTable thead th,
+[data-bs-theme="dark"] table.dataTable thead td {
+    color: var(--bs-body-color) !important;
+    background-color: var(--bs-secondary-bg) !important;
+    border-color: var(--bs-border-color) !important;
+}
+
+[data-bs-theme="dark"] table.dataTable tbody tr {
+    background-color: var(--bs-table-bg) !important;
+    color: var(--bs-body-color) !important;
+}
+
+[data-bs-theme="dark"] table.dataTable tbody tr:nth-of-type(odd) {
+    background-color: var(--bs-table-striped-bg) !important;
+}
+
+[data-bs-theme="dark"] table.dataTable tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.075) !important;
+}
+
+[data-bs-theme="dark"] table.dataTable tbody td {
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
+}
+
+[data-bs-theme="dark"] table.dataTable tbody td input.form-control,
+[data-bs-theme="dark"] table.dataTable tbody td input[type="text"],
+[data-bs-theme="dark"] table.dataTable tbody td input[type="number"] {
+    background-color: var(--bs-input-bg) !important;
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
+}
+
+[data-bs-theme="dark"] .dataTables_wrapper .dataTables_length,
+[data-bs-theme="dark"] .dataTables_wrapper .dataTables_filter,
+[data-bs-theme="dark"] .dataTables_wrapper .dataTables_info,
+[data-bs-theme="dark"] .dataTables_wrapper .dataTables_paginate {
+    color: var(--bs-body-color) !important;
+}
+
+[data-bs-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button {
+    color: var(--bs-body-color) !important;
+}
+
+[data-bs-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+    background-color: var(--bs-secondary-bg) !important;
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
+}
+
+[data-bs-theme="dark"] .dataTables_wrapper .dataTables_paginate .paginate_button.current {
+    background-color: var(--bs-primary) !important;
+    color: white !important;
+    border-color: var(--bs-primary) !important;
+}
+
 /* ===== Base Styles ===== */
 .navbar-brand {
     font-weight: bold;
