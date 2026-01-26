@@ -157,6 +157,23 @@
         color: var(--bs-success);
     }
 
+    .mac-days-left {
+        text-align: center;
+        font-weight: 500;
+    }
+
+    .mac-days-left.expired {
+        color: var(--bs-danger);
+    }
+
+    .mac-days-left.expiring-soon {
+        color: var(--bs-warning);
+    }
+
+    .mac-days-left.valid {
+        color: var(--bs-success);
+    }
+
     .btn-delete-mac {
         padding: 0.25rem 0.5rem;
         font-size: 0.75rem;
@@ -244,7 +261,12 @@
         <div class="col-md-6 col-lg-4 mb-4">
             <div class="card h-100">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">{{ portal.name or 'Unnamed Portal' }}</h5>
+                    <div class="d-flex align-items-center gap-2">
+                        <h5 class="mb-0">{{ portal.name or 'Unnamed Portal' }}</h5>
+                        <span class="badge bg-{{ 'success' if portal.get('fetch epg', 'true') == 'true' else 'secondary' }}" title="EPG">
+                            <i class="fas fa-calendar-alt"></i>
+                        </span>
+                    </div>
                     <span class="badge bg-{{ 'success' if portal.enabled == 'true' else 'secondary' }}">
                         {{ 'Enabled' if portal.enabled == 'true' else 'Disabled' }}
                     </span>
@@ -268,14 +290,8 @@
                     <p class="card-text">
                         <strong>Streams per MAC:</strong> {{ portal['streams per mac'] }}
                     </p>
-                    <p class="card-text">
-                        <strong>EPG Offset:</strong> {{ portal['epg offset'] }} hours
-                    </p>
                     <p class="card-text mb-0">
-                        <strong>Fetch EPG:</strong>
-                        <span class="badge bg-{{ 'success' if portal.get('fetch epg', 'true') == 'true' else 'secondary' }}">
-                            {{ 'Yes' if portal.get('fetch epg', 'true') == 'true' else 'No' }}
-                        </span>
+                        <strong>EPG Offset:</strong> {{ portal['epg offset'] }} hours
                     </p>
                 </div>
                 <div class="card-footer">
@@ -300,6 +316,9 @@
             <div class="portal-header" onclick="togglePortal('{{ portal_id }}')">
                 <i class="fas fa-chevron-right expand-icon"></i>
                 <span class="portal-name">{{ portal.name or 'Unnamed Portal' }}</span>
+                <span class="badge bg-{{ 'success' if portal.get('fetch epg', 'true') == 'true' else 'secondary' }} ms-2" title="EPG {{ 'enabled' if portal.get('fetch epg', 'true') == 'true' else 'disabled' }}">
+                    <i class="fas fa-calendar-alt"></i>
+                </span>
                 <div class="portal-meta">
                     <span class="portal-meta-item" title="Channels">
                         <i class="fas fa-tv"></i>
@@ -348,14 +367,6 @@
                         <div class="portal-info-label">EPG Offset</div>
                         <div class="portal-info-value">{{ portal['epg offset'] }} hours</div>
                     </div>
-                    <div class="portal-info-item">
-                        <div class="portal-info-label">Fetch EPG</div>
-                        <div class="portal-info-value">
-                            <span class="badge bg-{{ 'success' if portal.get('fetch epg', 'true') == 'true' else 'secondary' }}">
-                                {{ 'Yes' if portal.get('fetch epg', 'true') == 'true' else 'No' }}
-                            </span>
-                        </div>
-                    </div>
                     {% if portal.proxy %}
                     <div class="portal-info-item">
                         <div class="portal-info-label">Proxy</div>
@@ -376,6 +387,7 @@
                         <tr>
                             <th>MAC Address</th>
                             <th>Expires</th>
+                            <th style="width: 80px;">Days Left</th>
                             <th style="width: 50px;"></th>
                         </tr>
                     </thead>
@@ -384,6 +396,7 @@
                         <tr data-mac="{{ mac }}">
                             <td class="mac-address">{{ mac }}</td>
                             <td class="mac-expiry" data-expiry="{{ expiry }}">{{ expiry }}</td>
+                            <td class="mac-days-left" data-expiry="{{ expiry }}"></td>
                             <td>
                                 <button class="btn btn-outline-danger btn-delete-mac"
                                         onclick="deleteMac('{{ portal_id }}', '{{ mac }}')"
@@ -749,10 +762,11 @@ function sortMacTablesByExpiry() {
     });
 }
 
-// Highlight expiring MACs
+// Calculate remaining days and highlight MACs
 function highlightExpiringMacs() {
     const now = new Date();
     const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const oneDay = 24 * 60 * 60 * 1000;
 
     document.querySelectorAll('.mac-expiry').forEach(cell => {
         const expiryStr = cell.dataset.expiry;
@@ -769,6 +783,37 @@ function highlightExpiringMacs() {
             }
         } catch (e) {
             // Invalid date format, skip
+        }
+    });
+
+    // Calculate and display remaining days
+    document.querySelectorAll('.mac-days-left').forEach(cell => {
+        const expiryStr = cell.dataset.expiry;
+        if (!expiryStr) return;
+
+        try {
+            const expiry = new Date(expiryStr);
+            const diffTime = expiry - now;
+            const diffDays = Math.ceil(diffTime / oneDay);
+
+            if (diffDays < 0) {
+                cell.textContent = 'Expired';
+                cell.classList.add('expired');
+            } else if (diffDays === 0) {
+                cell.textContent = 'Today';
+                cell.classList.add('expiring-soon');
+            } else if (diffDays === 1) {
+                cell.textContent = '1 day';
+                cell.classList.add('expiring-soon');
+            } else if (diffDays <= 30) {
+                cell.textContent = `${diffDays} days`;
+                cell.classList.add('expiring-soon');
+            } else {
+                cell.textContent = `${diffDays} days`;
+                cell.classList.add('valid');
+            }
+        } catch (e) {
+            cell.textContent = '-';
         }
     });
 }
