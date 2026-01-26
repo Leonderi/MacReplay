@@ -143,7 +143,7 @@
                     </div>
                     
                     <div class="form-check mb-3">
-                        <input class="form-check-input" type="checkbox" id="sort_by_name" name="sort playlist by channel name" 
+                        <input class="form-check-input" type="checkbox" id="sort_by_name" name="sort playlist by channel name"
                                value="true" {{ 'checked' if settings['sort playlist by channel name'] == 'true' }}>
                         <label class="form-check-label" for="sort_by_name">
                             Sort playlist by channel name
@@ -151,9 +151,48 @@
                     </div>
                 </div>
             </div>
+
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-calendar-alt"></i> EPG Settings</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="epg_refresh_interval" class="form-label">EPG Refresh Interval (hours)</label>
+                        <input type="number" class="form-control" id="epg_refresh_interval" name="epg refresh interval"
+                               value="{{ settings['epg refresh interval'] }}" min="0.25" max="24" step="0.25">
+                        <div class="form-text">
+                            How often to automatically refresh EPG data. Default: 0.5 hours (30 minutes).
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="epg_future_hours" class="form-label">EPG Future (hours)</label>
+                                <input type="number" class="form-control" id="epg_future_hours" name="epg future hours"
+                                       value="{{ settings['epg future hours'] }}" min="1" max="168" step="1">
+                                <div class="form-text">
+                                    How far into the future to fetch EPG data. Default: 24 hours.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="epg_past_hours" class="form-label">EPG Past (hours)</label>
+                                <input type="number" class="form-control" id="epg_past_hours" name="epg past hours"
+                                       value="{{ settings['epg past hours'] }}" min="0" max="48" step="1">
+                                <div class="form-text">
+                                    How far into the past to keep EPG data. Default: 2 hours.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
-    
+
     <div class="row mt-4">
         <div class="col-md-6">
             <div class="card">

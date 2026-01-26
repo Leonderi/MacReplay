@@ -3,9 +3,21 @@ from requests.adapters import HTTPAdapter, Retry
 from urllib.parse import urlparse
 import re
 import logging
+import os
+
+# Get timezone from environment variable (e.g., "Europe/Berlin")
+# Falls back to UTC if not set
+def get_container_timezone():
+    """Get the container's timezone from TZ environment variable."""
+    tz = os.environ.get("TZ", "UTC")
+    return tz
 
 logger = logging.getLogger("MacReplay.stb")
 logger.setLevel(logging.DEBUG)
+
+# Log the timezone being used for API requests
+_tz = get_container_timezone()
+logger.info(f"Using timezone for portal requests: {_tz}")
 
 s = requests.Session()
 retries = Retry(total=3, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
@@ -69,7 +81,7 @@ def getUrl(url, proxy=None):
 
 def getToken(url, mac, proxy=None):
     proxies = {"http": proxy, "https": proxy}
-    cookies = {"mac": mac, "stb_lang": "en", "timezone": "Europe/London"}
+    cookies = {"mac": mac, "stb_lang": "en", "timezone": get_container_timezone()}
     headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)"}
     try:
         logger.debug(f"Getting token for MAC {mac} from {url}")
@@ -95,7 +107,7 @@ def getToken(url, mac, proxy=None):
 
 def getProfile(url, mac, token, proxy=None):
     proxies = {"http": proxy, "https": proxy}
-    cookies = {"mac": mac, "stb_lang": "en", "timezone": "Europe/London"}
+    cookies = {"mac": mac, "stb_lang": "en", "timezone": get_container_timezone()}
     headers = {
         "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
         "Authorization": "Bearer " + token,
@@ -117,7 +129,7 @@ def getProfile(url, mac, token, proxy=None):
 
 def getExpires(url, mac, token, proxy=None):
     proxies = {"http": proxy, "https": proxy}
-    cookies = {"mac": mac, "stb_lang": "en", "timezone": "Europe/London"}
+    cookies = {"mac": mac, "stb_lang": "en", "timezone": get_container_timezone()}
     headers = {
         "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
         "Authorization": "Bearer " + token,
@@ -146,7 +158,7 @@ def getExpires(url, mac, token, proxy=None):
 
 def getAllChannels(url, mac, token, proxy=None):
     proxies = {"http": proxy, "https": proxy}
-    cookies = {"mac": mac, "stb_lang": "en", "timezone": "Europe/London"}
+    cookies = {"mac": mac, "stb_lang": "en", "timezone": get_container_timezone()}
     headers = {
         "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
         "Authorization": "Bearer " + token,
@@ -176,7 +188,7 @@ def getAllChannels(url, mac, token, proxy=None):
 
 def getGenres(url, mac, token, proxy=None):
     proxies = {"http": proxy, "https": proxy}
-    cookies = {"mac": mac, "stb_lang": "en", "timezone": "Europe/London"}
+    cookies = {"mac": mac, "stb_lang": "en", "timezone": get_container_timezone()}
     headers = {
         "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
         "Authorization": "Bearer " + token,
@@ -212,7 +224,7 @@ def getGenreNames(url, mac, token, proxy=None):
 
 def getLink(url, mac, token, cmd, proxy=None):
     proxies = {"http": proxy, "https": proxy}
-    cookies = {"mac": mac, "stb_lang": "en", "timezone": "Europe/London"}
+    cookies = {"mac": mac, "stb_lang": "en", "timezone": get_container_timezone()}
     headers = {
         "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
         "Authorization": "Bearer " + token,
@@ -238,7 +250,7 @@ def getLink(url, mac, token, cmd, proxy=None):
 
 def getEpg(url, mac, token, period, proxy=None):
     proxies = {"http": proxy, "https": proxy}
-    cookies = {"mac": mac, "stb_lang": "en", "timezone": "Europe/London"}
+    cookies = {"mac": mac, "stb_lang": "en", "timezone": get_container_timezone()}
     headers = {
         "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
         "Authorization": "Bearer " + token,

@@ -43,6 +43,12 @@
                 <p class="card-text">
                     <strong>EPG Offset:</strong> {{ portal['epg offset'] }} hours
                 </p>
+                <p class="card-text">
+                    <strong>Fetch EPG:</strong>
+                    <span class="badge bg-{{ 'success' if portal.get('fetch epg', 'true') == 'true' else 'secondary' }}">
+                        {{ 'Yes' if portal.get('fetch epg', 'true') == 'true' else 'No' }}
+                    </span>
+                </p>
             </div>
             <div class="card-footer">
                 <button class="btn btn-sm btn-outline-primary" data-action="edit" data-portal-id="{{ portal_id }}">
@@ -100,6 +106,14 @@
                         <label for="proxy" class="form-label">Proxy (Optional)</label>
                         <input type="text" class="form-control" id="proxy" name="proxy" placeholder="http://proxy:port">
                         <div class="form-text">Leave empty if no proxy needed</div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="fetch_epg" name="fetch epg" value="true" checked>
+                            <label class="form-check-label" for="fetch_epg">
+                                Fetch EPG data from this portal
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -159,6 +173,14 @@
                     </div>
                     <div class="mb-3">
                         <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="edit_fetch_epg" name="fetch epg" value="true">
+                            <label class="form-check-label" for="edit_fetch_epg">
+                                Fetch EPG data from this portal
+                            </label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="retest" name="retest" value="true">
                             <label class="form-check-label" for="retest">
                                 Retest all MAC addresses
@@ -215,6 +237,7 @@ function editPortal(portalId) {
     document.getElementById('edit_streams_per_mac').value = portal['streams per mac'];
     document.getElementById('edit_epg_offset').value = portal['epg offset'];
     document.getElementById('edit_proxy').value = portal.proxy || '';
+    document.getElementById('edit_fetch_epg').checked = (portal['fetch epg'] || 'true') === 'true';
 
     new bootstrap.Modal(document.getElementById('editPortalModal')).show();
 }

@@ -443,9 +443,14 @@
                 {
                     data: "channelName",
                     render: function (data, type, row, meta) {
-                        var duplicateBadge = '';
+                        var badges = '';
                         if (row.duplicateCount && row.duplicateCount > 1) {
-                            duplicateBadge = '<span class="duplicate-badge">' + row.duplicateCount + 'x enabled</span>';
+                            badges += '<span class="duplicate-badge">' + row.duplicateCount + 'x</span>';
+                        }
+                        if (row.hasEpg) {
+                            badges += '<span class="epg-badge" title="Has EPG data">EPG</span>';
+                        } else {
+                            badges += '<span class="no-epg-badge" title="No EPG data">EPG</span>';
                         }
                         return '<div style="display: flex; align-items: center; gap: 5px;">' +
                                '<input \
@@ -458,7 +463,7 @@
                                 placeholder="' + row.channelName + '" \
                                 title="' + row.channelName + '" \
                                 value="' + row.customChannelName + '">' +
-                               duplicateBadge +
+                               badges +
                                '</div>';
                     },
                 },
