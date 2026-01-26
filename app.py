@@ -1317,26 +1317,26 @@ def editor_genres_grouped():
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Get all portals first
-        cursor.execute("SELECT DISTINCT portal FROM channels ORDER BY portal")
-        portals = [row['portal'] for row in cursor.fetchall()]
+        # Get all portal names (not IDs) - using DISTINCT on portal_name
+        cursor.execute("SELECT DISTINCT portal_name FROM channels WHERE portal_name IS NOT NULL AND portal_name != '' ORDER BY portal_name")
+        portal_names = [row['portal_name'] for row in cursor.fetchall()]
 
         genres_by_portal = []
-        for portal in portals:
+        for portal_name in portal_names:
             cursor.execute("""
                 SELECT DISTINCT COALESCE(NULLIF(custom_genre, ''), genre) as genre
                 FROM channels
-                WHERE portal = ?
+                WHERE portal_name = ?
                     AND COALESCE(NULLIF(custom_genre, ''), genre) IS NOT NULL
                     AND COALESCE(NULLIF(custom_genre, ''), genre) != ''
                     AND COALESCE(NULLIF(custom_genre, ''), genre) != 'None'
                 ORDER BY genre
-            """, (portal,))
+            """, (portal_name,))
 
             genres = [row['genre'] for row in cursor.fetchall()]
             if genres:  # Only add portal if it has genres
                 genres_by_portal.append({
-                    'portal': portal,
+                    'portal': portal_name,
                     'genres': genres
                 })
 
