@@ -2,41 +2,6 @@
 
 {% block title %}Logs - MacReplay{% endblock %}
 
-{% block head %}
-<style>
-    .log-container {
-        background-color: #1e1e1e;
-        color: #d4d4d4;
-        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-        font-size: 0.85rem;
-        padding: 15px;
-        border-radius: 5px;
-        height: 70vh;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-    }
-    .log-line {
-        padding: 2px 0;
-        border-bottom: 1px solid #2d2d2d;
-    }
-    .log-line:hover {
-        background-color: #2d2d2d;
-    }
-    .log-level-INFO { color: #4fc3f7; }
-    .log-level-WARNING { color: #ffb74d; }
-    .log-level-ERROR { color: #ef5350; }
-    .log-level-DEBUG { color: #81c784; }
-    .log-timestamp { color: #888; }
-    .log-controls {
-        position: sticky;
-        top: 0;
-        z-index: 10;
-        background: var(--bs-body-bg);
-        padding-bottom: 10px;
-    }
-</style>
-{% endblock %}
 
 {% block content %}
 <div class="row">
