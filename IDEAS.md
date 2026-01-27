@@ -33,6 +33,30 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
 - [ ] Portal-Konfiguration importieren
 - [ ] Channels zwischen Gruppen verschieben (Drag & Drop)
 
+### Portal-Import aus Textdateien
+- [ ] Import von Portalen aus formatierten Scan-Ergebnis-Dateien
+- [ ] Automatische Erkennung von Portal-URL und MAC-Adresse
+- [ ] Optional: Ablaufdatum extrahieren
+- [ ] Mehrere Portale pro Datei unterstützen
+- [ ] Preview vor Import (welche Portale erkannt wurden)
+- [ ] Duplikat-Erkennung (Portal+MAC bereits vorhanden)
+
+**Beispiel-Eingabeformat:**
+```
+🌐 Panel     ➤ http://example.com:80/c/
+🔢 MAC Addr  ➤ 00:1A:79:2D:24:01
+📆 Expiração = 24-04-2026 [89 dias]
+```
+
+**Erkennungs-Patterns:**
+```python
+patterns = {
+    'url': r'(?:Panel|Server|URL|Host)\s*[➤:=]\s*(https?://[^\s]+)',
+    'mac': r'(?:MAC\s*Addr|MAC)\s*[➤:=]\s*([0-9A-Fa-f:]{17})',
+    'expiry': r'(?:Expir|Ablauf|Exp)\w*\s*[=:]\s*(\d{2}-\d{2}-\d{4})',
+}
+```
+
 ### Allgemeine UI
 - [ ] Responsive Design für Mobile verbessern
 - [ ] Tastatur-Shortcuts (z.B. `/` für Suche)
