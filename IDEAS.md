@@ -147,11 +147,49 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
 
 ### Event-Channels (EPG-basiert)
 - [ ] Channels automatisch aus EPG-Einträgen generieren
-- [ ] Beispiel: Sky Sport Bundesliga mit Spiel um 15:00 → Channel "BVB vs Bayern - 27.01 15:00"
 - [ ] Mehrere Events pro Quell-Channel → mehrere Event-Channels
 - [ ] Kein EPG für Event-Channels nötig (Name = Info)
 - [ ] Konfigurierbare Regeln (welche Channels, welche Event-Typen)
 - [ ] Automatische Löschung nach Event-Ende
+
+**EPG-Muster Beispiele:**
+```
+Eishockey:
+  Titel: "LIVE: Augsburger Panther - Eisbären Berlin"
+  Text:  "Augsburger Panther - Eisbären Berlin, PENNY DEL, Spieltag 44"
+
+Fußball:
+  Titel: "Live BL: Werder Bremen - TSG Hoffenheim, Nachholspiel vom 16. Spieltag"
+```
+
+**Regel-Konfiguration (Konzept):**
+```yaml
+event_rules:
+  - name: "Bundesliga"
+    channels:
+      - "Sky Sport Bundesliga*"
+      - "Sky Sport Top Event"
+    pattern: "Live.*BL:|Bundesliga"
+    extract: "(?P<home>.+?) - (?P<away>.+?),"
+    output: "{home} vs {away} | {date} {time}"
+
+  - name: "DEL Eishockey"
+    channels:
+      - "Sport1*"
+      - "MagentaSport*"
+    pattern: "LIVE:.*DEL|PENNY DEL"
+    extract: "(?P<home>.+?) - (?P<away>.+)"
+    output: "{home} vs {away} | DEL | {date} {time}"
+```
+
+**Generiertes Ergebnis:**
+```
+Original-Channel: Sky Sport Bundesliga 1
+EPG-Eintrag:      "Live BL: Werder Bremen - TSG Hoffenheim" @ 15:30
+
+→ Event-Channel:  "Werder Bremen vs Hoffenheim | 27.01 15:30"
+                  (verlinkt auf Sky Sport Bundesliga 1)
+```
 
 ### Automatische Backup-Channels
 - [ ] Channels mit gleichem (normalisierten) Namen erkennen
