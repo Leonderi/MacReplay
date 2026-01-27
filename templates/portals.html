@@ -546,11 +546,11 @@ function highlightExpiringMacs() {
         try {
             const expiry = new Date(expiryStr);
             if (expiry < now) {
-                cell.classList.add('expired');
+                cell.classList.add('status-expired');
             } else if (expiry < thirtyDaysFromNow) {
-                cell.classList.add('expiring-soon');
+                cell.classList.add('status-expiring-soon');
             } else {
-                cell.classList.add('valid');
+                cell.classList.add('status-valid');
             }
         } catch (e) {
             // Invalid date format, skip
@@ -569,19 +569,19 @@ function highlightExpiringMacs() {
 
             if (diffDays < 0) {
                 cell.textContent = 'Expired';
-                cell.classList.add('expired');
+                cell.classList.add('status-expired');
             } else if (diffDays === 0) {
                 cell.textContent = 'Today';
-                cell.classList.add('expiring-soon');
+                cell.classList.add('status-expiring-soon');
             } else if (diffDays === 1) {
                 cell.textContent = '1 day';
-                cell.classList.add('expiring-soon');
+                cell.classList.add('status-expiring-soon');
             } else if (diffDays <= 30) {
                 cell.textContent = `${diffDays} days`;
-                cell.classList.add('expiring-soon');
+                cell.classList.add('status-expiring-soon');
             } else {
                 cell.textContent = `${diffDays} days`;
-                cell.classList.add('valid');
+                cell.classList.add('status-valid');
             }
         } catch (e) {
             cell.textContent = '-';

@@ -351,24 +351,20 @@
     white-space: nowrap;
 }
 
+/* EPG badge base styles - use .epg-badge.active or .epg-badge.inactive */
 .epg-badge {
-    background-color: #198754;
     color: white;
     font-size: 0.65em;
     padding: 2px 5px;
     border-radius: 3px;
     margin-left: 3px;
     white-space: nowrap;
+    background-color: #198754; /* default: active/green */
 }
 
+.epg-badge.inactive,
 .no-epg-badge {
     background-color: #dc3545;
-    color: white;
-    font-size: 0.65em;
-    padding: 2px 5px;
-    border-radius: 3px;
-    margin-left: 3px;
-    white-space: nowrap;
 }
 
 /* DataTable header styles */
@@ -635,37 +631,26 @@ table.dataTable thead th {
     font-size: 0.9rem;
 }
 
-.mac-expiry {
-    font-size: 0.875rem;
-}
-
-.mac-expiry.expired {
+/* Status color utility classes - reusable for expiry/days-left/etc */
+.status-expired {
     color: var(--bs-danger);
 }
 
-.mac-expiry.expiring-soon {
+.status-expiring-soon {
     color: var(--bs-warning);
 }
 
-.mac-expiry.valid {
+.status-valid {
     color: var(--bs-success);
+}
+
+.mac-expiry {
+    font-size: 0.875rem;
 }
 
 .mac-days-left {
     text-align: center;
     font-weight: 500;
-}
-
-.mac-days-left.expired {
-    color: var(--bs-danger);
-}
-
-.mac-days-left.expiring-soon {
-    color: var(--bs-warning);
-}
-
-.mac-days-left.valid {
-    color: var(--bs-success);
 }
 
 .btn-delete-mac {
@@ -754,10 +739,7 @@ table.dataTable thead th {
     border-left: 4px solid var(--bs-danger);
 }
 
-.epg-toast .spinner-border {
-    width: 1rem;
-    height: 1rem;
-}
+/* Note: Use .spinner-border-sm class for small spinners in toasts */
 
 @keyframes epgSlideIn {
     from { transform: translateX(100%); opacity: 0; }

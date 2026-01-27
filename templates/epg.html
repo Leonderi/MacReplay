@@ -334,7 +334,7 @@ function showToast(message, type = 'info', duration = 0) {
     } else if (type === 'error') {
         icon = '<i class="fas fa-exclamation-circle text-danger"></i>';
     } else if (type === 'info') {
-        icon = '<div class="spinner-border text-info" role="status"></div>';
+        icon = '<div class="spinner-border spinner-border-sm text-info" role="status"></div>';
     }
 
     toast.innerHTML = `${icon}<span>${message}</span>`;
