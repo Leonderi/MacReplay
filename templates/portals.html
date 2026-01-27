@@ -90,17 +90,21 @@
                 <i class="fas fa-chevron-right expand-icon"></i>
                 <span class="portal-name">{{ portal.name or 'Unnamed Portal' }}</span>
                 <div class="portal-meta">
-                    <span class="portal-meta-item" title="Channels">
+                    <span class="portal-meta-item portal-stat-channels" title="Channels">
                         <i class="fas fa-tv"></i>
-                        <span>{{ portal_stats.get(portal_id, {}).get('channels', 0) }}</span>
+                        <span class="portal-meta-value">{{ portal_stats.get(portal_id, {}).get('channels', 0) }}</span>
                     </span>
-                    <span class="portal-meta-item" title="Groups">
+                    <span class="portal-meta-item portal-stat-groups" title="Groups">
                         <i class="fas fa-folder"></i>
-                        <span>{{ portal_stats.get(portal_id, {}).get('groups', 0) }}</span>
+                        <span class="portal-meta-value">{{ portal_stats.get(portal_id, {}).get('groups', 0) }}</span>
                     </span>
-                    <span class="portal-meta-item" title="MACs">
+                    <span class="portal-meta-item portal-stat-macs" title="MACs">
                         <i class="fas fa-network-wired"></i>
-                        <span>{{ portal.macs|length }}</span>
+                        <span class="portal-meta-value">{{ portal.macs|length }}</span>
+                    </span>
+                    <span class="portal-meta-item portal-stat-expiry" title="Days until next MAC expires" data-portal-id="{{ portal_id }}">
+                        <i class="fas fa-clock"></i>
+                        <span class="portal-expiry-value">-</span>
                     </span>
                     <span class="badge bg-{{ 'success' if portal.get('fetch epg', 'true') == 'true' else 'danger' }}" title="EPG {{ 'enabled' if portal.get('fetch epg', 'true') == 'true' else 'disabled' }}">EPG</span>
                     <span class="badge bg-{{ 'success' if portal.enabled == 'true' else 'danger' }}">
@@ -121,14 +125,6 @@
                     <div class="portal-info-item">
                         <div class="portal-info-label">URL</div>
                         <div class="portal-info-value">{{ portal.url }}</div>
-                    </div>
-                    <div class="portal-info-item">
-                        <div class="portal-info-label">Channels</div>
-                        <div class="portal-info-value">{{ portal_stats.get(portal_id, {}).get('channels', 0) }}</div>
-                    </div>
-                    <div class="portal-info-item">
-                        <div class="portal-info-label">Groups</div>
-                        <div class="portal-info-value">{{ portal_stats.get(portal_id, {}).get('groups', 0) }}</div>
                     </div>
                     <div class="portal-info-item">
                         <div class="portal-info-label">Streams per MAC</div>
@@ -158,7 +154,7 @@
                         <tr>
                             <th>MAC Address</th>
                             <th>Expires</th>
-                            <th style="width: 80px;">Days Left</th>
+                            <th style="width: 70px;">Days Left</th>
                             <th style="width: 50px;"></th>
                         </tr>
                     </thead>
@@ -589,6 +585,52 @@ function highlightExpiringMacs() {
     });
 }
 
+// Calculate and display LATEST MAC expiry for each portal in list view
+function updatePortalExpiryIndicators() {
+    const now = new Date();
+    const oneDay = 24 * 60 * 60 * 1000;
+
+    document.querySelectorAll('.portal-stat-expiry').forEach(indicator => {
+        const portalId = indicator.dataset.portalId;
+        const portalItem = indicator.closest('.portal-list-item');
+        if (!portalItem) return;
+
+        const expiryDates = [];
+        portalItem.querySelectorAll('.mac-expiry').forEach(cell => {
+            const expiryStr = cell.dataset.expiry;
+            if (expiryStr) {
+                try {
+                    expiryDates.push(new Date(expiryStr));
+                } catch (e) {}
+            }
+        });
+
+        const valueSpan = indicator.querySelector('.portal-expiry-value');
+        if (expiryDates.length === 0) {
+            valueSpan.textContent = '-';
+            return;
+        }
+
+        // Find LATEST (last) expiry - maximum date
+        const latest = expiryDates.reduce((max, d) => d > max ? d : max);
+        const diffDays = Math.ceil((latest - now) / oneDay);
+
+        if (diffDays < 0) {
+            valueSpan.textContent = 'Exp!';
+            valueSpan.classList.add('status-expired');
+        } else if (diffDays === 0) {
+            valueSpan.textContent = 'Today';
+            valueSpan.classList.add('status-expiring-soon');
+        } else if (diffDays <= 30) {
+            valueSpan.textContent = `${diffDays}d`;
+            valueSpan.classList.add('status-expiring-soon');
+        } else {
+            valueSpan.textContent = `${diffDays}d`;
+            valueSpan.classList.add('status-valid');
+        }
+    });
+}
+
 // Event delegation for portal actions
 document.addEventListener('click', function(e) {
     const btn = e.target.closest('[data-action]');
@@ -615,6 +657,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Highlight expiring MACs
     highlightExpiringMacs();
+
+    // Update portal expiry indicators in list view
+    updatePortalExpiryIndicators();
 });
 </script>
 {% endblock %}
