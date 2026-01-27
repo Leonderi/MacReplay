@@ -128,6 +128,45 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
 
 ---
 
+## Channel-Management
+
+### Channel-Name Normalisierung
+- [ ] Länder-Tags entfernen oder vereinheitlichen (z.B. `[DE]`, `DE:`, `🇩🇪`)
+- [ ] Qualitäts-Tags normalisieren (HD, FHD, 4K, UHD → einheitliches Format)
+- [ ] Unnötige Sonderzeichen und Leerzeichen entfernen
+- [ ] Regelbasiertes System für Normalisierung (konfigurierbar)
+- [ ] Preview vor Anwendung der Normalisierung
+
+**Offene Fragen:**
+- Wie Normalisierung konsistent halten, wenn Channels regelmäßig vom Portal aktualisiert werden?
+  - Möglichkeit: Mapping-Tabelle (Original-Name → Normalisierter Name)
+  - Möglichkeit: Normalisierung bei jedem Sync automatisch anwenden
+- Wie EPG-Zuordnung trotz geänderter Namen sicherstellen?
+  - Möglichkeit: EPG-Mapping über Channel-ID statt Name
+  - Möglichkeit: Fuzzy-Matching für EPG-Zuordnung
+
+### Event-Channels (EPG-basiert)
+- [ ] Channels automatisch aus EPG-Einträgen generieren
+- [ ] Beispiel: Sky Sport Bundesliga mit Spiel um 15:00 → Channel "BVB vs Bayern - 27.01 15:00"
+- [ ] Mehrere Events pro Quell-Channel → mehrere Event-Channels
+- [ ] Kein EPG für Event-Channels nötig (Name = Info)
+- [ ] Konfigurierbare Regeln (welche Channels, welche Event-Typen)
+- [ ] Automatische Löschung nach Event-Ende
+
+### Automatische Backup-Channels
+- [ ] Channels mit gleichem (normalisierten) Namen erkennen
+- [ ] Automatisch als Backup-Gruppe zusammenfassen
+- [ ] Failover bei Stream-Ausfall zum nächsten Backup
+- [ ] Priorität per Drag & Drop festlegen
+
+**Offene Fragen:**
+- Automatisches Probing mit ffmpeg/ffprobe bei vielen Channels zu aufwendig?
+  - Möglichkeit: Nur bei Wiedergabe-Start proben
+  - Möglichkeit: Hintergrund-Job mit Rate-Limiting
+  - Möglichkeit: Nur manuell ausgelöstes Probing
+
+---
+
 ## Infrastruktur
 
 ### Docker
