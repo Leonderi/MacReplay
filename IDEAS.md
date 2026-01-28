@@ -7,10 +7,10 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
 ## Legende
 
 | Status | Bedeutung |
-|--------|-----------|
-| ⬜ | Offen |
-| ✅ | Erledigt |
-| 🔄 | In Arbeit |
+| --------| -----------|
+| ⬜　　　| Offen     |
+| ✅　　　| Erledigt  |
+| 🔄　　 | In Arbeit |
 
 ---
 
@@ -34,7 +34,7 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
 - ⬜ Portal-Konfiguration exportieren (JSON)
 - ⬜ Portal-Konfiguration importieren
 - ⬜ Channels zwischen Gruppen verschieben (Drag & Drop)
-
+g
 ### Genre/Gruppen-Auswahl beim Portal-Hinzufügen
 - ✅ **Genre-Auswahl beim Hinzufügen eines Portals**
   - 2-Schritt Wizard: Erst Portal-Info, dann Genre-Checkboxen
@@ -207,6 +207,10 @@ Die Stalker Portal API liefert via `?type=stb&action=get_profile` zusätzliche I
 - ⬜ Länder-Tags entfernen oder vereinheitlichen (z.B. `[DE]`, `DE:`, `🇩🇪`)
 - ⬜ Qualitäts-Tags normalisieren (HD, FHD, 4K, UHD → einheitliches Format)
 - ⬜ Unnötige Sonderzeichen und Leerzeichen entfernen
+- ⬜ Tag-Extraktion beim Import: Auflösung, Audio-Codec, Video-Codec, Country-Code in strukturierte Felder speichern
+- ⬜ Bereinigter Name in `custom_name` sichern, Originalname bleibt in `name`
+- ⬜ Regex-Regeln in Settings pro Tag-Gruppe konfigurierbar (z.B. resolution/audio/video/country)
+- ⬜ Option: Normalisierung automatisch beim Import/Sync ausführen
 - ⬜ Regelbasiertes System für Normalisierung (konfigurierbar)
 - ⬜ Preview vor Anwendung der Normalisierung
 
