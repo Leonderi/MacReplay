@@ -51,7 +51,14 @@
                     </p>
                     <div class="row mb-2">
                         <div class="col-6">
-                            <strong><i class="fas fa-tv"></i> Channels:</strong> {{ portal_stats.get(portal_id, {}).get('channels', 0) }}
+                            <strong><i class="fas fa-tv"></i> Channels:</strong>
+                            {% set total_ch = portal_stats.get(portal_id, {}).get('total_channels', 0) %}
+                            {% set selected_ch = portal_stats.get(portal_id, {}).get('channels', 0) %}
+                            {% if total_ch > 0 and total_ch != selected_ch %}
+                                <span class="text-primary">{{ selected_ch }}</span> / {{ total_ch }}
+                            {% else %}
+                                {{ selected_ch }}
+                            {% endif %}
                         </div>
                         <div class="col-6">
                             <strong><i class="fas fa-folder"></i> Groups:</strong>
@@ -104,9 +111,9 @@
                     <span class="portal-url-small">{{ portal.url[:60] }}{% if portal.url|length > 60 %}...{% endif %}</span>
                 </div>
                 <div class="portal-meta">
-                    <span class="portal-meta-item portal-stat-channels" title="Channels">
+                    <span class="portal-meta-item portal-stat-channels" title="Total Channels">
                         <i class="fas fa-tv"></i>
-                        <span class="portal-meta-value">{{ portal_stats.get(portal_id, {}).get('channels', 0) }}</span>
+                        <span class="portal-meta-value">{{ portal_stats.get(portal_id, {}).get('total_channels', portal_stats.get(portal_id, {}).get('channels', 0)) }}</span>
                     </span>
                     <span class="portal-meta-item portal-stat-groups" title="Total Groups">
                         <i class="fas fa-folder"></i>
@@ -142,7 +149,13 @@
                     <div class="portal-info-item portal-info-tile">
                         <div class="portal-info-label">Channels</div>
                         <div class="portal-info-value-large">
-                            <span class="text-primary">{{ portal_stats.get(portal_id, {}).get('channels', 0) }}</span>
+                            {% set total_ch = portal_stats.get(portal_id, {}).get('total_channels', 0) %}
+                            {% set selected_ch = portal_stats.get(portal_id, {}).get('channels', 0) %}
+                            {% if total_ch > 0 and total_ch != selected_ch %}
+                                <span class="text-primary">{{ selected_ch }}</span><span class="text-muted"> / {{ total_ch }}</span>
+                            {% else %}
+                                <span class="text-primary">{{ selected_ch }}</span>
+                            {% endif %}
                         </div>
                     </div>
                     <div class="portal-info-item portal-info-tile">
@@ -1073,6 +1086,9 @@ async function savePortalGenres() {
     const selectedGenres = Array.from(document.querySelectorAll('#genreModalTilesContainer .genre-tile.selected'))
         .map(tile => tile.dataset.genreId);
 
+    // Calculate total channels from all genres
+    const totalChannels = genreModalGenres.reduce((sum, g) => sum + (g.channel_count || 0), 0);
+
     const btn = document.getElementById('saveGenresBtn');
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
@@ -1085,6 +1101,7 @@ async function savePortalGenres() {
                 portal_id: currentGenreModalPortalId,
                 selected_genres: selectedGenres,
                 total_groups: allTiles.length,
+                total_channels: totalChannels,
                 genres_mac: currentGenreModalMac  // MAC used for genre selection
             })
         });

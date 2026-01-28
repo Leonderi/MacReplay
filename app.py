@@ -1086,12 +1086,14 @@ def portals():
     except Exception as e:
         logger.error(f"Error getting portal stats: {e}")
 
-    # Add total_groups from portal config (if available)
+    # Add total_groups and total_channels from portal config (if available)
     for portal_id, portal in portal_data.items():
         if portal_id not in portal_stats:
             portal_stats[portal_id] = {'channels': 0, 'groups': 0}
         # Use stored total_groups or fall back to groups count
         portal_stats[portal_id]['total_groups'] = portal.get('total_groups', portal_stats[portal_id]['groups'])
+        # Use stored total_channels or fall back to channels count
+        portal_stats[portal_id]['total_channels'] = portal.get('total_channels', portal_stats[portal_id]['channels'])
 
     return render_template("portals.html", portals=portal_data, portal_stats=portal_stats)
 
@@ -1287,6 +1289,7 @@ def update_portal_genres():
         portal_id = data.get("portal_id")
         selected_genres = data.get("selected_genres", [])
         total_groups = data.get("total_groups", 0)
+        total_channels = data.get("total_channels", 0)
         genres_mac = data.get("genres_mac", "")  # MAC used for genre selection
 
         if not portal_id:
@@ -1301,11 +1304,12 @@ def update_portal_genres():
         # Update selected genres and total groups count
         logger.info(f"Updating genres for portal {portal.get('name', portal_id)}")
         logger.info(f"Received selected_genres: {selected_genres} (type: {type(selected_genres)})")
-        logger.info(f"Received total_groups: {total_groups}")
+        logger.info(f"Received total_groups: {total_groups}, total_channels: {total_channels}")
         logger.info(f"Received genres_mac: {genres_mac}")
 
         portal["selected_genres"] = selected_genres
         portal["total_groups"] = total_groups
+        portal["total_channels"] = total_channels
         if genres_mac:
             portal["genres_mac"] = genres_mac  # Store which MAC was used for genre selection
         portals[portal_id] = portal
