@@ -917,12 +917,15 @@ def refresh_channels_cache():
                         continue
 
                     stb.getProfile(url, mac, token, proxy)
-                    mac_channels = stb.getAllChannels(url, mac, token, proxy)
+                    mac_channels_raw = stb.getAllChannels(url, mac, token, proxy)
                     mac_genres = stb.getGenreNames(url, mac, token, proxy)
 
-                    if not mac_channels:
+                    if not mac_channels_raw:
                         logger.warning(f"No channels returned for MAC {mac}")
                         continue
+
+                    # Handle both list and dict formats (some portals return dict with channel IDs as keys)
+                    mac_channels = mac_channels_raw if isinstance(mac_channels_raw, list) else list(mac_channels_raw.values())
 
                     # Merge genres
                     if mac_genres:
@@ -932,6 +935,8 @@ def refresh_channels_cache():
 
                     # Process channels from this MAC
                     for channel in mac_channels:
+                        if not isinstance(channel, dict):
+                            continue
                         channel_id = str(channel["id"])
                         genre_id = str(channel.get("tv_genre_id", ""))
 
@@ -1245,9 +1250,12 @@ def get_portal_genres():
         channels = stb.getAllChannels(url, mac, token, proxy)
         channel_counts = {}
         if channels:
-            for channel in channels:
-                genre_id = str(channel.get("tv_genre_id", ""))
-                channel_counts[genre_id] = channel_counts.get(genre_id, 0) + 1
+            # Handle both list and dict formats (some portals return dict with channel IDs as keys)
+            channel_list = channels if isinstance(channels, list) else list(channels.values())
+            for channel in channel_list:
+                if isinstance(channel, dict):
+                    genre_id = str(channel.get("tv_genre_id", ""))
+                    channel_counts[genre_id] = channel_counts.get(genre_id, 0) + 1
 
         # Liste von {id, title, channel_count} Objekten zurückgeben
         genre_list = [
