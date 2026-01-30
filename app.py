@@ -2855,9 +2855,22 @@ def editor_data():
         if group_filter:
             genre_values = [g.strip() for g in group_filter.split(',') if g.strip()]
             if genre_values:
-                placeholders = ','.join(['?'] * len(genre_values))
-                base_query += f" AND (COALESCE(NULLIF(c.custom_genre, ''), c.genre) IN ({placeholders}))"
-                params.extend(genre_values)
+                include_ungrouped = "Ungrouped" in genre_values
+                genre_values = [g for g in genre_values if g != "Ungrouped"]
+
+                clauses = []
+                if genre_values:
+                    placeholders = ','.join(['?'] * len(genre_values))
+                    clauses.append(f"COALESCE(NULLIF(c.custom_genre, ''), c.genre) IN ({placeholders})")
+                    params.extend(genre_values)
+
+                if include_ungrouped:
+                    clauses.append(
+                        "(c.genre_id IS NULL OR c.genre_id = '' OR COALESCE(NULLIF(c.custom_genre, ''), c.genre) IS NULL OR COALESCE(NULLIF(c.custom_genre, ''), c.genre) = '')"
+                    )
+
+                if clauses:
+                    base_query += " AND (" + " OR ".join(clauses) + ")"
 
         # Add duplicate filter (only for enabled channels)
         if duplicate_filter == 'enabled_only':
@@ -3252,6 +3265,8 @@ def editor_genres_grouped():
             """, (portal_name,))
 
             genres = [row['genre'] for row in cursor.fetchall()]
+            if "Ungrouped" not in genres:
+                genres.insert(0, "Ungrouped")
             if genres:  # Only add portal if it has genres
                 genres_by_portal.append({
                     'portal': portal_name,
