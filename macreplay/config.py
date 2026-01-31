@@ -1,6 +1,14 @@
 import json
 import os
+import tempfile
+import threading
 import uuid
+from contextlib import contextmanager
+from datetime import datetime
+try:
+    import fcntl  # Unix-only file locking
+except Exception:  # pragma: no cover - non-Unix platforms
+    fcntl = None
 
 # ----------------------------
 # Docker / Volume friendly paths
@@ -24,6 +32,23 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 # In-memory config (mirrors original app.py behavior)
 config = {}
+_config_lock = threading.Lock()
+_lock_path = CONFIG_PATH + ".lock"
+
+
+@contextmanager
+def _file_lock():
+    """Best-effort cross-process lock using fcntl on Unix."""
+    if fcntl is None:
+        yield
+        return
+    os.makedirs(os.path.dirname(_lock_path), exist_ok=True)
+    with open(_lock_path, "w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 defaultSettings = {
@@ -87,13 +112,33 @@ defaultPortal = {
 }
 
 
+def _write_config(data):
+    config_dir = os.path.dirname(CONFIG_PATH)
+    os.makedirs(config_dir, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", delete=False, dir=config_dir, encoding="utf-8"
+    ) as tmp:
+        json.dump(data, tmp, indent=4)
+        tmp_path = tmp.name
+    os.replace(tmp_path, CONFIG_PATH)
+
+
 def loadConfig():
     global config
-    try:
-        with open(CONFIG_PATH) as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
+    with _config_lock, _file_lock():
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            # Back up corrupt config for inspection
+            if os.path.exists(CONFIG_PATH):
+                ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+                backup_path = f"{CONFIG_PATH}.corrupt.{ts}"
+                try:
+                    os.replace(CONFIG_PATH, backup_path)
+                except Exception:
+                    pass
+            data = {}
 
     data.setdefault("portals", {})
     data.setdefault("settings", {})
@@ -122,8 +167,8 @@ def loadConfig():
 
     data["portals"] = portalsOut
 
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(data, f, indent=4)
+    with _file_lock():
+        _write_config(data)
 
     config = data
     return data
@@ -135,8 +180,8 @@ def getPortals():
 
 def savePortals(portals):
     config["portals"] = portals
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f, indent=4)
+    with _config_lock, _file_lock():
+        _write_config(config)
 
 
 def getSettings():
@@ -145,5 +190,5 @@ def getSettings():
 
 def saveSettings(settings):
     config["settings"] = settings
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f, indent=4)
+    with _config_lock, _file_lock():
+        _write_config(config)
