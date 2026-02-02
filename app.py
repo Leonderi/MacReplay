@@ -1308,7 +1308,6 @@ def extract_channel_tags(raw_name, tag_config, settings=None, allow_match=True):
             "resolution": "",
             "video_codec": "",
             "country": "",
-            "audio_tags": "",
             "event_tags": "",
             "misc_tags": "",
             "is_header": 0,
@@ -1363,11 +1362,6 @@ def extract_channel_tags(raw_name, tag_config, settings=None, allow_match=True):
             break
     if video_codec and video_codec != "HEVC":
         video_codec = ""
-
-    audio_tags = []
-    for label, pattern in tag_config["audio"]:
-        if re.search(pattern, name_upper):
-            audio_tags.append(label)
 
     raw_pattern = r"(?:\bRAW\b|ᴿᴬᵂ|ʀᴀᴡ)"
     is_raw = 1 if re.search(r"\bRAW\b", name_upper) or re.search(raw_pattern, name, flags=re.IGNORECASE) else 0
@@ -1459,8 +1453,6 @@ def extract_channel_tags(raw_name, tag_config, settings=None, allow_match=True):
             removal_for_segments.append(pattern)
         for _label, pattern in tag_config["video"]:
             removal_for_segments.append(pattern)
-        for _label, pattern in tag_config["audio"]:
-            removal_for_segments.append(pattern)
         removal_for_segments.append(r"\bRAW\b")
         removal_for_segments.extend([pattern for _, pattern in tag_config["event"]])
         removal_for_segments.extend(tag_config["misc"])
@@ -1490,8 +1482,6 @@ def extract_channel_tags(raw_name, tag_config, settings=None, allow_match=True):
     if unicode_resolution:
         removal_patterns.append(unicode_resolution)
     for _label, pattern in tag_config["video"]:
-        removal_patterns.append(pattern)
-    for _label, pattern in tag_config["audio"]:
         removal_patterns.append(pattern)
     removal_patterns.append(raw_pattern)
     if not dropped_tag_segments:
@@ -1523,7 +1513,6 @@ def extract_channel_tags(raw_name, tag_config, settings=None, allow_match=True):
         resolution = ""
         video_codec = ""
         country = ""
-        audio_tags = []
         event_tags = []
         misc_tags = []
         is_event = 0
@@ -1534,7 +1523,6 @@ def extract_channel_tags(raw_name, tag_config, settings=None, allow_match=True):
         "resolution": resolution,
         "video_codec": video_codec,
         "country": country,
-        "audio_tags": ",".join(audio_tags),
         "event_tags": ",".join(event_tags),
         "misc_tags": ",".join(misc_tags),
         "matched_name": matched_name,
@@ -2217,7 +2205,6 @@ def refresh_channels_cache(target_portal_id=None):
                 resolution = tag_info["resolution"]
                 video_codec = tag_info["video_codec"]
                 country = tag_info["country"]
-                audio_tags = tag_info["audio_tags"]
                 event_tags = tag_info["event_tags"]
                 misc_tags = tag_info["misc_tags"]
                 matched_name = tag_info["matched_name"]
@@ -2258,7 +2245,6 @@ def refresh_channels_cache(target_portal_id=None):
                         resolution,
                         video_codec,
                         country,
-                        audio_tags,
                         event_tags,
                         misc_tags,
                         matched_name,
@@ -2284,12 +2270,12 @@ def refresh_channels_cache(target_portal_id=None):
                     INSERT INTO channels (
                         portal, channel_id, portal_name, name, display_name, number, genre, genre_id, logo,
                         enabled, custom_name, auto_name, custom_number, custom_genre,
-                        custom_epg_id, fallback_channel, resolution, video_codec, country,
-                            audio_tags, event_tags, misc_tags, matched_name, matched_source,
+                        custom_epg_id, resolution, video_codec, country,
+                            event_tags, misc_tags, matched_name, matched_source,
                             matched_station_id, matched_call_sign, matched_logo, matched_score,
                             is_header, is_event, is_raw, available_macs, alternate_ids, cmd,
                             channel_hash
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(portal, channel_id) DO UPDATE SET
                             portal_name = excluded.portal_name,
                             name = excluded.name,
@@ -2305,7 +2291,6 @@ def refresh_channels_cache(target_portal_id=None):
                             resolution = excluded.resolution,
                             video_codec = excluded.video_codec,
                             country = excluded.country,
-                            audio_tags = excluded.audio_tags,
                             event_tags = excluded.event_tags,
                             misc_tags = excluded.misc_tags,
                             matched_name = CASE
@@ -2345,7 +2330,7 @@ def refresh_channels_cache(target_portal_id=None):
                     ''', (
                         portal_id, channel_id, portal_name, channel_name, display_name, channel_number,
                         genre, genre_id, logo, enabled_default, "", auto_name, "", "", "",
-                        "", resolution, video_codec, country, audio_tags, event_tags, misc_tags,
+                        resolution, video_codec, country, event_tags, misc_tags,
                         matched_name, matched_source, matched_station_id, matched_call_sign, matched_logo, matched_score,
                         is_header, is_event, is_raw,
                         available_macs, alternate_ids, cmd, channel_hash

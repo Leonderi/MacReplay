@@ -181,6 +181,9 @@ Die Stalker Portal API liefert via `?type=stb&action=get_profile` zusätzliche I
 
 ## Technische Erweiterungen
 
+### Datenbank & Schema
+- ✅ Channels-Tabelle aufgeräumt (fallback_channel/audio_tags entfernt, Spalten gruppiert)
+
 ### Multi-User Support
 - ⬜ Benutzerregistrierung und Login
 - ⬜ Rollen-System (Admin, Editor, Viewer)

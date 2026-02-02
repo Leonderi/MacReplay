@@ -21,11 +21,9 @@ Source: live schema from `/host_opt/stb-proxy/data/channels.db` and `init_db()` 
 | `custom_number` | TEXT | User-defined channel number |
 | `custom_genre` | TEXT | User-defined genre |
 | `custom_epg_id` | TEXT | User-defined EPG ID |
-| `fallback_channel` | TEXT | Name of fallback channel |
 | `resolution` | TEXT | Extracted resolution tag (e.g. HD, FHD, UHD) |
 | `video_codec` | TEXT | Extracted video codec tag |
 | `country` | TEXT | Extracted country/region code |
-| `audio_tags` | TEXT | Extracted audio tags (CSV) |
 | `event_tags` | TEXT | Extracted event tags (CSV) |
 | `misc_tags` | TEXT | Extracted misc tags (CSV) |
 | `matched_name` | TEXT | Matched external name |

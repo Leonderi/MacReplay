@@ -31,7 +31,7 @@ Header regex ideas (draft)
   - ^[\s#*✦┃★._-]{6,}.*[\s#*✦┃★._-]{6,}$
 
 Storage options
-- Best for filtering: add columns for `resolution`, `video_codec`, `country` and store `audio_tags` as JSON/CSV.
+- Best for filtering: add columns for `resolution`, `video_codec`, `country`.
 - Most flexible: single JSON column (e.g. `tags_json`) with grouped values.
 - CSV is simple but poor for querying; use only for low-importance fields.
 

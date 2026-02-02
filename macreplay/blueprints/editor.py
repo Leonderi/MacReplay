@@ -235,12 +235,11 @@ def create_editor_blueprint(
                     c.resolution LIKE ? OR
                     c.video_codec LIKE ? OR
                     c.country LIKE ? OR
-                    c.audio_tags LIKE ? OR
                     c.event_tags LIKE ? OR
                     c.misc_tags LIKE ?
                 )"""
                 search_param = f"%{search_value}%"
-                params.extend([search_param] * 16)
+                params.extend([search_param] * 15)
 
             use_materialized_counts = not any(
                 [
@@ -367,7 +366,7 @@ def create_editor_blueprint(
                     c.portal, c.channel_id, c.portal_name, c.name, c.display_name, c.number, c.genre, c.genre_id, c.logo,
                     c.enabled, c.custom_name, c.auto_name, c.custom_number, c.custom_genre,
                     c.custom_epg_id, c.available_macs, c.alternate_ids,
-                    c.resolution, c.video_codec, c.country, c.audio_tags, c.event_tags, c.misc_tags,
+                    c.resolution, c.video_codec, c.country, c.event_tags, c.misc_tags,
                     c.matched_name, c.matched_source, c.matched_station_id, c.matched_call_sign, c.matched_logo, c.matched_score,
                     c.is_raw, c.is_event, c.is_header
                 {base_query}
@@ -425,7 +424,6 @@ def create_editor_blueprint(
                         "resolution": row["resolution"] or "",
                         "videoCodec": row["video_codec"] or "",
                         "country": row["country"] or "",
-                        "audioTags": row["audio_tags"] or "",
                         "eventTags": row["event_tags"] or "",
                         "miscTags": row["misc_tags"] or "",
                         "matchedName": row["matched_name"] or "",
