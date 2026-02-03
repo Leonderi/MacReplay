@@ -16,8 +16,6 @@ import xml.etree.ElementTree as ET
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
-from logging.handlers import RotatingFileHandler
 from macreplay.config import (
     LOG_DIR,
     CONFIG_PATH,
@@ -45,9 +43,9 @@ from macreplay.blueprints.hdhr import create_hdhr_blueprint
 from macreplay.blueprints.playlist import create_playlist_blueprint
 from macreplay.blueprints.streaming import create_streaming_blueprint
 from macreplay.services.jobs import JobManager
-logger = logging.getLogger("MacReplay")
-logger.setLevel(logging.INFO)
-logFormat = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+from macreplay.logging_setup import setup_logging
+from macreplay.bootstrap import build_register_params, start_runtime
+logger = setup_logging(LOG_DIR)
 
 # Group filter: include ungrouped channels only when no groups are active for a portal.
 ACTIVE_GROUP_CONDITION = (
@@ -103,21 +101,6 @@ EPG_REFRESH_INTERVAL_ENV = os.getenv("EPG_REFRESH_INTERVAL", None)
 # Set to 0 to disable automatic channel refresh
 CHANNEL_REFRESH_INTERVAL_ENV = os.getenv("CHANNEL_REFRESH_INTERVAL", None)
 
-log_file_path = os.path.join(LOG_DIR, "MacReplay.log")
-
-# File logging with rotation
-fileHandler = RotatingFileHandler(
-    log_file_path, maxBytes=5 * 1024 * 1024, backupCount=5
-)
-fileHandler.setFormatter(logFormat)
-logger.addHandler(fileHandler)
-
-# Console logging (docker logs)
-consoleFormat = logging.Formatter("[%(levelname)s] %(message)s")
-consoleHandler = logging.StreamHandler()
-consoleHandler.setFormatter(consoleFormat)
-logger.addHandler(consoleHandler)
-
 # Use system-installed ffmpeg and ffprobe (like STB-Proxy does)
 ffmpeg_path = os.getenv("FFMPEG", "ffmpeg")
 ffprobe_path = os.getenv("FFPROBE", "ffprobe")
@@ -132,15 +115,11 @@ except (subprocess.CalledProcessError, FileNotFoundError):
 
 
 import stb
-from flask import Flask
-import secrets
+from macreplay.app_factory import create_app
 import waitress
 import sqlite3
 import tempfile
-import atexit
 
-app = Flask(__name__)
-app.secret_key = secrets.token_urlsafe(32)
 
 # EPG refresh status tracking
 epg_refresh_status = {
@@ -3488,12 +3467,20 @@ job_manager = JobManager(
     effective_epg_name=effective_epg_name,
 )
 
-app.register_blueprint(create_settings_blueprint(job_manager.enqueue_epg_refresh))
-app.register_blueprint(
-    create_epg_blueprint(
+app = create_app(
+    register_params=build_register_params(
+        create_settings_blueprint=create_settings_blueprint,
+        create_epg_blueprint=create_epg_blueprint,
+        create_portal_blueprint=create_portal_blueprint,
+        create_editor_blueprint=create_editor_blueprint,
+        create_misc_blueprint=create_misc_blueprint,
+        create_hdhr_blueprint=create_hdhr_blueprint,
+        create_playlist_blueprint=create_playlist_blueprint,
+        create_streaming_blueprint=create_streaming_blueprint,
+        job_manager=job_manager,
         refresh_xmltv=refresh_xmltv,
-        refresh_epg_for_ids=refresh_xmltv_for_epg_ids,
-        enqueue_epg_refresh=job_manager.enqueue_epg_refresh,
+        refresh_xmltv_for_epg_ids=refresh_xmltv_for_epg_ids,
+        refresh_xmltv_for_portal=refresh_xmltv_for_portal,
         get_cached_xmltv=lambda: cached_xmltv,
         get_last_updated=lambda: last_updated,
         get_epg_refresh_status=lambda: epg_refresh_status,
@@ -3503,88 +3490,35 @@ app.register_blueprint(
         effective_epg_name=effective_epg_name,
         getSettings=getSettings,
         open_epg_source_db=_open_epg_source_db,
-    )
-)
-app.register_blueprint(
-    create_portal_blueprint(
-        logger=logger,
-        getPortals=getPortals,
         savePortals=savePortals,
-        getSettings=getSettings,
-        get_db_connection=get_db_connection,
         ACTIVE_GROUP_CONDITION=ACTIVE_GROUP_CONDITION,
         channelsdvr_match_status=channelsdvr_match_status,
         channelsdvr_match_status_lock=channelsdvr_match_status_lock,
         normalize_mac_data=normalize_mac_data,
-        job_manager=job_manager,
         defaultPortal=defaultPortal,
         DB_PATH=DB_PATH,
         set_cached_xmltv=_set_cached_xmltv,
         filter_cache=filter_cache,
-    )
-)
-app.register_blueprint(
-    create_editor_blueprint(
-        logger=logger,
-        get_db_connection=get_db_connection,
-        ACTIVE_GROUP_CONDITION=ACTIVE_GROUP_CONDITION,
-        get_cached_xmltv=lambda: cached_xmltv,
         get_epg_channel_ids=_get_epg_channel_ids,
         get_epg_channel_map=_get_epg_channel_map,
-        getSettings=getSettings,
         suggest_channelsdvr_matches=suggest_channelsdvr_matches,
         host=host,
-        refresh_epg_for_ids=refresh_xmltv_for_epg_ids,
         refresh_lineup=refresh_lineup,
-        enqueue_refresh_all=job_manager.enqueue_refresh_all,
         set_last_playlist_host=_set_last_playlist_host,
-        filter_cache=filter_cache,
-        effective_epg_name=effective_epg_name,
-    )
-)
-app.register_blueprint(
-    create_misc_blueprint(
+        refresh_custom_sources=refresh_custom_sources,
         LOG_DIR=LOG_DIR,
         occupied=occupied,
-        refresh_custom_sources=refresh_custom_sources,
-    )
-)
-
-app.register_blueprint(
-    create_hdhr_blueprint(
-        host=host,
-        getSettings=getSettings,
-        refresh_lineup=refresh_lineup,
         get_cached_lineup=_get_cached_lineup,
-    )
-)
-app.register_blueprint(
-    create_playlist_blueprint(
-        logger=logger,
-        host=host,
-        getSettings=getSettings,
-        get_db_connection=get_db_connection,
-        ACTIVE_GROUP_CONDITION=ACTIVE_GROUP_CONDITION,
         effective_display_name=effective_display_name,
-        effective_epg_name=effective_epg_name,
         get_cached_playlist=_get_cached_playlist,
         set_cached_playlist=_set_cached_playlist,
         get_last_playlist_host=_get_last_playlist_host,
-        set_last_playlist_host=_set_last_playlist_host,
-    )
-)
-app.register_blueprint(
-    create_streaming_blueprint(
-        logger=logger,
-        getPortals=getPortals,
-        getSettings=getSettings,
-        get_db_connection=get_db_connection,
         moveMac=moveMac,
         score_mac_for_selection=score_mac_for_selection,
-        occupied=occupied,
         hls_manager=hls_manager,
     )
 )
+
 
 
 def start_epg_scheduler():
@@ -3693,19 +3627,14 @@ def start_refresh():
 
 
 if __name__ == "__main__":
-    loadConfig()
-    
-    # Initialize the database
-    init_db(getPortals, logger)
-
-    # Start the refresh thread before the server
-    start_refresh()
-    
-    # Start HLS stream manager monitoring
-    hls_manager.start_monitoring()
-    
-    # Register cleanup handler for HLS streams
-    atexit.register(hls_manager.cleanup_all)
+    start_runtime(
+        loadConfig=loadConfig,
+        init_db=init_db,
+        getPortals=getPortals,
+        logger=logger,
+        start_refresh=start_refresh,
+        hls_manager=hls_manager,
+    )
 
     # Start the server
     if "TERM_PROGRAM" in os.environ.keys() and os.environ["TERM_PROGRAM"] == "vscode":
