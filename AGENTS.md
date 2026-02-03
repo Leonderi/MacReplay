@@ -40,3 +40,7 @@ Guidance for AI coding agents working in this repository.
 
 ## QA / Smoke Tests
 - After significant refactors or infrastructure changes, run a quick Docker smoke test.
+
+## Testing Helpers
+- `create_app(test_config=...)` supports passing `TESTING=True`.
+- For in-memory SQLite in tests, set `DB_PATH` to `file:memdb1?mode=memory&cache=shared`.

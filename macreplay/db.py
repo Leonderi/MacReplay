@@ -1,3 +1,4 @@
+import os
 import sqlite3
 
 from .config import DB_PATH
@@ -5,7 +6,11 @@ from .config import DB_PATH
 
 def get_db_connection():
     """Get a database connection."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = os.getenv("DB_PATH", DB_PATH)
+    if db_path.startswith("file:"):
+        conn = sqlite3.connect(db_path, uri=True)
+    else:
+        conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.row_factory = sqlite3.Row

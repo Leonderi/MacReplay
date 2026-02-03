@@ -44,7 +44,9 @@ from macreplay.blueprints.playlist import create_playlist_blueprint
 from macreplay.blueprints.streaming import create_streaming_blueprint
 from macreplay.services.jobs import JobManager
 from macreplay.logging_setup import setup_logging
-from macreplay.bootstrap import build_register_params, start_runtime
+from macreplay.bootstrap import start_runtime
+from macreplay.runtime_state import RuntimeState
+from macreplay.services.scheduler import start_epg_scheduler, start_channel_scheduler
 logger = setup_logging(LOG_DIR)
 
 # Group filter: include ungrouped channels only when no groups are active for a portal.
@@ -3467,120 +3469,60 @@ job_manager = JobManager(
     effective_epg_name=effective_epg_name,
 )
 
-app = create_app(
-    register_params=build_register_params(
-        create_settings_blueprint=create_settings_blueprint,
-        create_epg_blueprint=create_epg_blueprint,
-        create_portal_blueprint=create_portal_blueprint,
-        create_editor_blueprint=create_editor_blueprint,
-        create_misc_blueprint=create_misc_blueprint,
-        create_hdhr_blueprint=create_hdhr_blueprint,
-        create_playlist_blueprint=create_playlist_blueprint,
-        create_streaming_blueprint=create_streaming_blueprint,
-        job_manager=job_manager,
-        refresh_xmltv=refresh_xmltv,
-        refresh_xmltv_for_epg_ids=refresh_xmltv_for_epg_ids,
-        refresh_xmltv_for_portal=refresh_xmltv_for_portal,
-        get_cached_xmltv=lambda: cached_xmltv,
-        get_last_updated=lambda: last_updated,
-        get_epg_refresh_status=lambda: epg_refresh_status,
-        logger=logger,
-        getPortals=getPortals,
-        get_db_connection=get_db_connection,
-        effective_epg_name=effective_epg_name,
-        getSettings=getSettings,
-        open_epg_source_db=_open_epg_source_db,
-        savePortals=savePortals,
-        ACTIVE_GROUP_CONDITION=ACTIVE_GROUP_CONDITION,
-        channelsdvr_match_status=channelsdvr_match_status,
-        channelsdvr_match_status_lock=channelsdvr_match_status_lock,
-        normalize_mac_data=normalize_mac_data,
-        defaultPortal=defaultPortal,
-        DB_PATH=DB_PATH,
-        set_cached_xmltv=_set_cached_xmltv,
-        filter_cache=filter_cache,
-        get_epg_channel_ids=_get_epg_channel_ids,
-        get_epg_channel_map=_get_epg_channel_map,
-        suggest_channelsdvr_matches=suggest_channelsdvr_matches,
-        host=host,
-        refresh_lineup=refresh_lineup,
-        set_last_playlist_host=_set_last_playlist_host,
-        refresh_custom_sources=refresh_custom_sources,
-        LOG_DIR=LOG_DIR,
-        occupied=occupied,
-        get_cached_lineup=_get_cached_lineup,
-        effective_display_name=effective_display_name,
-        get_cached_playlist=_get_cached_playlist,
-        set_cached_playlist=_set_cached_playlist,
-        get_last_playlist_host=_get_last_playlist_host,
-        moveMac=moveMac,
-        score_mac_for_selection=score_mac_for_selection,
-        hls_manager=hls_manager,
-    )
+runtime_state = RuntimeState(
+    logger=logger,
+    job_manager=job_manager,
+    get_epg_refresh_interval=get_epg_refresh_interval,
+    get_channel_refresh_interval=get_channel_refresh_interval,
+    create_settings_blueprint=create_settings_blueprint,
+    create_epg_blueprint=create_epg_blueprint,
+    create_portal_blueprint=create_portal_blueprint,
+    create_editor_blueprint=create_editor_blueprint,
+    create_misc_blueprint=create_misc_blueprint,
+    create_hdhr_blueprint=create_hdhr_blueprint,
+    create_playlist_blueprint=create_playlist_blueprint,
+    create_streaming_blueprint=create_streaming_blueprint,
+    refresh_xmltv=refresh_xmltv,
+    refresh_xmltv_for_epg_ids=refresh_xmltv_for_epg_ids,
+    refresh_xmltv_for_portal=refresh_xmltv_for_portal,
+    get_cached_xmltv=lambda: cached_xmltv,
+    get_last_updated=lambda: last_updated,
+    get_epg_refresh_status=lambda: epg_refresh_status,
+    getPortals=getPortals,
+    get_db_connection=get_db_connection,
+    effective_epg_name=effective_epg_name,
+    getSettings=getSettings,
+    open_epg_source_db=_open_epg_source_db,
+    savePortals=savePortals,
+    ACTIVE_GROUP_CONDITION=ACTIVE_GROUP_CONDITION,
+    channelsdvr_match_status=channelsdvr_match_status,
+    channelsdvr_match_status_lock=channelsdvr_match_status_lock,
+    normalize_mac_data=normalize_mac_data,
+    defaultPortal=defaultPortal,
+    DB_PATH=DB_PATH,
+    set_cached_xmltv=_set_cached_xmltv,
+    filter_cache=filter_cache,
+    get_epg_channel_ids=_get_epg_channel_ids,
+    get_epg_channel_map=_get_epg_channel_map,
+    suggest_channelsdvr_matches=suggest_channelsdvr_matches,
+    host=host,
+    refresh_lineup=refresh_lineup,
+    set_last_playlist_host=_set_last_playlist_host,
+    refresh_custom_sources=refresh_custom_sources,
+    LOG_DIR=LOG_DIR,
+    occupied=occupied,
+    get_cached_lineup=_get_cached_lineup,
+    effective_display_name=effective_display_name,
+    get_cached_playlist=_get_cached_playlist,
+    set_cached_playlist=_set_cached_playlist,
+    get_last_playlist_host=_get_last_playlist_host,
+    moveMac=moveMac,
+    score_mac_for_selection=score_mac_for_selection,
+    hls_manager=hls_manager,
 )
 
+app = create_app(state=runtime_state)
 
-
-def start_epg_scheduler():
-    """Start a background thread that periodically refreshes EPG data."""
-    def epg_refresh_loop():
-        while True:
-            try:
-                # Get refresh interval (env variable takes precedence over settings)
-                interval_hours = get_epg_refresh_interval()
-                # Convert to seconds, minimum 60 seconds
-                interval_seconds = max(60, int(interval_hours * 3600))
-
-                logger.info(f"EPG scheduler: Next refresh in {interval_hours} hours ({interval_seconds} seconds)")
-                time.sleep(interval_seconds)
-
-                logger.info("EPG scheduler: Queueing scheduled EPG refresh...")
-                job_manager.enqueue_epg_refresh(reason="scheduled")
-                logger.info("EPG scheduler: EPG refresh queued.")
-
-            except Exception as e:
-                logger.error(f"EPG scheduler error: {e}")
-                # Wait 5 minutes before retrying on error
-                time.sleep(300)
-
-    scheduler_thread = threading.Thread(target=epg_refresh_loop, daemon=True)
-    scheduler_thread.start()
-    logger.info("EPG background scheduler started!")
-
-
-def start_channel_scheduler():
-    """Start a background thread that periodically refreshes channel data from portals."""
-    def channel_refresh_loop():
-        while True:
-            try:
-                # Get refresh interval (env variable takes precedence over settings)
-                interval_hours = get_channel_refresh_interval()
-
-                # If interval is 0, disable automatic refresh
-                if interval_hours <= 0:
-                    logger.info("Channel scheduler: Automatic channel refresh disabled (interval = 0)")
-                    # Check again in 1 hour in case setting changes
-                    time.sleep(3600)
-                    continue
-
-                # Convert to seconds, minimum 60 seconds
-                interval_seconds = max(60, int(interval_hours * 3600))
-
-                logger.info(f"Channel scheduler: Next refresh in {interval_hours} hours ({interval_seconds} seconds)")
-                time.sleep(interval_seconds)
-
-                logger.info("Channel scheduler: Queueing scheduled channel refresh...")
-                total = job_manager.enqueue_refresh_all(reason="scheduled")
-                logger.info("Channel scheduler: Channel refresh queued (%s portals).", total)
-
-            except Exception as e:
-                logger.error(f"Channel scheduler error: {e}")
-                # Wait 5 minutes before retrying on error
-                time.sleep(300)
-
-    scheduler_thread = threading.Thread(target=channel_refresh_loop, daemon=True)
-    scheduler_thread.start()
-    logger.info("Channel background scheduler started!")
 
 
 def start_refresh():
@@ -3620,10 +3562,10 @@ def start_refresh():
     threading.Thread(target=refresh_all, daemon=True).start()
 
     # Start the EPG background scheduler
-    start_epg_scheduler()
+    start_epg_scheduler(runtime_state)
 
     # Start the channel background scheduler
-    start_channel_scheduler()
+    start_channel_scheduler(runtime_state)
 
 
 if __name__ == "__main__":
@@ -3634,6 +3576,7 @@ if __name__ == "__main__":
         logger=logger,
         start_refresh=start_refresh,
         hls_manager=hls_manager,
+        enable_jobs=True,
     )
 
     # Start the server
