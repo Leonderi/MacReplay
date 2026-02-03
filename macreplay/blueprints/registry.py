@@ -1,97 +1,99 @@
 def register_blueprints(*, app, state):
-    app.register_blueprint(state.create_settings_blueprint(state.job_manager.enqueue_epg_refresh))
     app.register_blueprint(
-        state.create_epg_blueprint(
-            refresh_xmltv=state.refresh_xmltv,
-            refresh_epg_for_ids=state.refresh_xmltv_for_epg_ids,
-            enqueue_epg_refresh=state.job_manager.enqueue_epg_refresh,
-            get_cached_xmltv=state.get_cached_xmltv,
-            get_last_updated=state.get_last_updated,
-            get_epg_refresh_status=state.get_epg_refresh_status,
-            logger=state.logger,
-            getPortals=state.getPortals,
-            get_db_connection=state.get_db_connection,
-            effective_epg_name=state.effective_epg_name,
-            getSettings=state.getSettings,
-            open_epg_source_db=state.open_epg_source_db,
+        state.settings.create_settings_blueprint(state.settings.enqueue_epg_refresh)
+    )
+    app.register_blueprint(
+        state.epg.create_epg_blueprint(
+            refresh_xmltv=state.epg.refresh_xmltv,
+            refresh_epg_for_ids=state.epg.refresh_xmltv_for_epg_ids,
+            enqueue_epg_refresh=state.epg.enqueue_epg_refresh,
+            get_cached_xmltv=state.epg.get_cached_xmltv,
+            get_last_updated=state.epg.get_last_updated,
+            get_epg_refresh_status=state.epg.get_epg_refresh_status,
+            logger=state.epg.logger,
+            getPortals=state.epg.getPortals,
+            get_db_connection=state.epg.get_db_connection,
+            effective_epg_name=state.epg.effective_epg_name,
+            getSettings=state.epg.getSettings,
+            open_epg_source_db=state.epg.open_epg_source_db,
         )
     )
     app.register_blueprint(
-        state.create_portal_blueprint(
-            logger=state.logger,
-            getPortals=state.getPortals,
-            savePortals=state.savePortals,
-            getSettings=state.getSettings,
-            get_db_connection=state.get_db_connection,
-            ACTIVE_GROUP_CONDITION=state.ACTIVE_GROUP_CONDITION,
-            channelsdvr_match_status=state.channelsdvr_match_status,
-            channelsdvr_match_status_lock=state.channelsdvr_match_status_lock,
-            normalize_mac_data=state.normalize_mac_data,
-            job_manager=state.job_manager,
-            defaultPortal=state.defaultPortal,
-            DB_PATH=state.DB_PATH,
-            set_cached_xmltv=state.set_cached_xmltv,
-            filter_cache=state.filter_cache,
+        state.portal.create_portal_blueprint(
+            logger=state.portal.logger,
+            getPortals=state.portal.getPortals,
+            savePortals=state.portal.savePortals,
+            getSettings=state.portal.getSettings,
+            get_db_connection=state.portal.get_db_connection,
+            ACTIVE_GROUP_CONDITION=state.portal.ACTIVE_GROUP_CONDITION,
+            channelsdvr_match_status=state.portal.channelsdvr_match_status,
+            channelsdvr_match_status_lock=state.portal.channelsdvr_match_status_lock,
+            normalize_mac_data=state.portal.normalize_mac_data,
+            job_manager=state.portal.job_manager,
+            defaultPortal=state.portal.defaultPortal,
+            DB_PATH=state.portal.DB_PATH,
+            set_cached_xmltv=state.portal.set_cached_xmltv,
+            filter_cache=state.portal.filter_cache,
         )
     )
     app.register_blueprint(
-        state.create_editor_blueprint(
-            logger=state.logger,
-            get_db_connection=state.get_db_connection,
-            ACTIVE_GROUP_CONDITION=state.ACTIVE_GROUP_CONDITION,
-            get_cached_xmltv=state.get_cached_xmltv,
-            get_epg_channel_ids=state.get_epg_channel_ids,
-            get_epg_channel_map=state.get_epg_channel_map,
-            getSettings=state.getSettings,
-            suggest_channelsdvr_matches=state.suggest_channelsdvr_matches,
-            host=state.host,
-            refresh_epg_for_ids=state.refresh_xmltv_for_epg_ids,
-            refresh_lineup=state.refresh_lineup,
-            enqueue_refresh_all=state.job_manager.enqueue_refresh_all,
-            set_last_playlist_host=state.set_last_playlist_host,
-            filter_cache=state.filter_cache,
-            effective_epg_name=state.effective_epg_name,
+        state.editor.create_editor_blueprint(
+            logger=state.editor.logger,
+            get_db_connection=state.editor.get_db_connection,
+            ACTIVE_GROUP_CONDITION=state.editor.ACTIVE_GROUP_CONDITION,
+            get_cached_xmltv=state.editor.get_cached_xmltv,
+            get_epg_channel_ids=state.editor.get_epg_channel_ids,
+            get_epg_channel_map=state.editor.get_epg_channel_map,
+            getSettings=state.editor.getSettings,
+            suggest_channelsdvr_matches=state.editor.suggest_channelsdvr_matches,
+            host=state.editor.host,
+            refresh_epg_for_ids=state.editor.refresh_epg_for_ids,
+            refresh_lineup=state.editor.refresh_lineup,
+            enqueue_refresh_all=state.editor.enqueue_refresh_all,
+            set_last_playlist_host=state.editor.set_last_playlist_host,
+            filter_cache=state.editor.filter_cache,
+            effective_epg_name=state.editor.effective_epg_name,
         )
     )
     app.register_blueprint(
-        state.create_misc_blueprint(
-            LOG_DIR=state.LOG_DIR,
-            occupied=state.occupied,
-            refresh_custom_sources=state.refresh_custom_sources,
+        state.misc.create_misc_blueprint(
+            LOG_DIR=state.misc.LOG_DIR,
+            occupied=state.misc.occupied,
+            refresh_custom_sources=state.misc.refresh_custom_sources,
         )
     )
     app.register_blueprint(
-        state.create_hdhr_blueprint(
-            host=state.host,
-            getSettings=state.getSettings,
-            refresh_lineup=state.refresh_lineup,
-            get_cached_lineup=state.get_cached_lineup,
+        state.hdhr.create_hdhr_blueprint(
+            host=state.hdhr.host,
+            getSettings=state.hdhr.getSettings,
+            refresh_lineup=state.hdhr.refresh_lineup,
+            get_cached_lineup=state.hdhr.get_cached_lineup,
         )
     )
     app.register_blueprint(
-        state.create_playlist_blueprint(
-            logger=state.logger,
-            host=state.host,
-            getSettings=state.getSettings,
-            get_db_connection=state.get_db_connection,
-            ACTIVE_GROUP_CONDITION=state.ACTIVE_GROUP_CONDITION,
-            effective_display_name=state.effective_display_name,
-            effective_epg_name=state.effective_epg_name,
-            get_cached_playlist=state.get_cached_playlist,
-            set_cached_playlist=state.set_cached_playlist,
-            get_last_playlist_host=state.get_last_playlist_host,
-            set_last_playlist_host=state.set_last_playlist_host,
+        state.playlist.create_playlist_blueprint(
+            logger=state.playlist.logger,
+            host=state.playlist.host,
+            getSettings=state.playlist.getSettings,
+            get_db_connection=state.playlist.get_db_connection,
+            ACTIVE_GROUP_CONDITION=state.playlist.ACTIVE_GROUP_CONDITION,
+            effective_display_name=state.playlist.effective_display_name,
+            effective_epg_name=state.playlist.effective_epg_name,
+            get_cached_playlist=state.playlist.get_cached_playlist,
+            set_cached_playlist=state.playlist.set_cached_playlist,
+            get_last_playlist_host=state.playlist.get_last_playlist_host,
+            set_last_playlist_host=state.playlist.set_last_playlist_host,
         )
     )
     app.register_blueprint(
-        state.create_streaming_blueprint(
-            logger=state.logger,
-            getPortals=state.getPortals,
-            getSettings=state.getSettings,
-            get_db_connection=state.get_db_connection,
-            moveMac=state.moveMac,
-            score_mac_for_selection=state.score_mac_for_selection,
-            occupied=state.occupied,
-            hls_manager=state.hls_manager,
+        state.streaming.create_streaming_blueprint(
+            logger=state.streaming.logger,
+            getPortals=state.streaming.getPortals,
+            getSettings=state.streaming.getSettings,
+            get_db_connection=state.streaming.get_db_connection,
+            moveMac=state.streaming.moveMac,
+            score_mac_for_selection=state.streaming.score_mac_for_selection,
+            occupied=state.streaming.occupied,
+            hls_manager=state.streaming.hls_manager,
         )
     )
