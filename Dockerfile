@@ -1,5 +1,5 @@
 # Use Python 3.11 slim image as base
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 # Set working directory
 WORKDIR /app
@@ -13,10 +13,11 @@ RUN apt-get update && apt-get install -y \
 # Create directories for data persistence
 RUN mkdir -p /app/data /app/logs
 
-# Copy Python dependencies file
+# Copy Python dependencies files
 COPY requirements.txt .
+COPY requirements-dev.txt .
 
-# Install Python dependencies
+# Install runtime dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
@@ -45,6 +46,16 @@ EXPOSE 8001
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8001/ || exit 1
+
+# Development image with test dependencies
+FROM base AS dev
+RUN pip install --no-cache-dir -r requirements-dev.txt
+COPY tests/ tests/
+ENV PATH="/home/macreplay/.local/bin:${PATH}"
+ENV PYTHONPATH="/app"
+
+# Production image (default)
+FROM base AS prod
 
 # Run the application
 CMD ["python", "app.py"] 
