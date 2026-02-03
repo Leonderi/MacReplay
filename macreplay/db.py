@@ -151,6 +151,78 @@ def init_db(get_portals, logger):
         ON portal_stats(portal_name)
     ''')
 
+    # EPG sources metadata (central mapping)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS epg_sources (
+            source_id TEXT PRIMARY KEY,
+            name TEXT,
+            url TEXT,
+            source_type TEXT,
+            enabled INTEGER DEFAULT 1,
+            interval_hours REAL,
+            last_fetch REAL,
+            last_refresh REAL
+        )
+    ''')
+
+    # EPG channels metadata per source
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS epg_channels (
+            source_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            display_name TEXT,
+            icon TEXT,
+            lcn TEXT,
+            updated_at REAL,
+            PRIMARY KEY (source_id, channel_id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_epg_channels_channel
+        ON epg_channels(channel_id)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_epg_channels_source
+        ON epg_channels(source_id)
+    ''')
+
+    # Optional alternate display-names per channel
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS epg_channel_names (
+            source_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            PRIMARY KEY (source_id, channel_id, name)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_epg_channel_names_name
+        ON epg_channel_names(name)
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS channel_tags (
+            portal_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            tag_type TEXT NOT NULL,
+            tag_value TEXT NOT NULL,
+            PRIMARY KEY (portal_id, channel_id, tag_type, tag_value)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_channel_tags_type_value
+        ON channel_tags(tag_type, tag_value)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_channel_tags_channel
+        ON channel_tags(portal_id, channel_id)
+    ''')
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS group_stats (
             portal_id TEXT NOT NULL,

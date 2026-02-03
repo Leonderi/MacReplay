@@ -12,6 +12,8 @@ class JobManager:
         refresh_channels_cache,
         run_portal_matching,
         refresh_xmltv,
+        refresh_xmltv_for_portal=None,
+        refresh_epg_for_ids=None,
         getSettings,
         getPortals,
         get_db_connection,
@@ -21,6 +23,7 @@ class JobManager:
         channels_refresh_status,
         channels_refresh_status_lock,
         set_cached_xmltv=None,
+        effective_epg_name=None,
         max_workers=2,
         max_retries=2,
     ):
@@ -28,6 +31,8 @@ class JobManager:
         self.refresh_channels_cache = refresh_channels_cache
         self.run_portal_matching = run_portal_matching
         self.refresh_xmltv = refresh_xmltv
+        self.refresh_xmltv_for_portal = refresh_xmltv_for_portal
+        self.refresh_epg_for_ids = refresh_epg_for_ids
         self.getSettings = getSettings
         self.getPortals = getPortals
         self.get_db_connection = get_db_connection
@@ -37,6 +42,7 @@ class JobManager:
         self.channels_refresh_status = channels_refresh_status
         self.channels_refresh_status_lock = channels_refresh_status_lock
         self.set_cached_xmltv = set_cached_xmltv
+        self.effective_epg_name = effective_epg_name
 
         self.queue = deque()
         self.queue_lock = threading.Lock()
@@ -203,8 +209,43 @@ class JobManager:
         if self._should_match_portal(portal_id):
             self._run_matching(portal_id)
 
-        self.enqueue_epg_refresh(reason="portal_refresh")
+        self._run_refresh_epg_for_portal(portal_id)
         self.logger.info("Job refresh_portal completed: %s", portal_name)
+
+    def _run_refresh_epg_for_portal(self, portal_id):
+        if self.refresh_xmltv_for_portal:
+            self.refresh_xmltv_for_portal(portal_id)
+            return
+        if not self.refresh_epg_for_ids or not self.effective_epg_name:
+            self.logger.info("Skipping EPG refresh for portal %s (not configured).", portal_id)
+            return
+        portal = self.getPortals().get(portal_id, {})
+        if portal and portal.get("fetch epg", "true") != "true":
+            self.logger.info("Skipping EPG refresh for portal %s (disabled).", portal_id)
+            return
+        conn = self.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT custom_name, auto_name, name, custom_epg_id
+            FROM channels
+            WHERE enabled = 1 AND portal_id = ?
+            """,
+            (portal_id,),
+        )
+        epg_ids = set()
+        for row in cursor.fetchall():
+            epg_id = row["custom_epg_id"] if row["custom_epg_id"] else self.effective_epg_name(
+                row["custom_name"], row["auto_name"], row["name"]
+            )
+            if epg_id:
+                epg_ids.add(epg_id)
+        conn.close()
+        if not epg_ids:
+            self.logger.info("EPG refresh skipped for portal %s (no enabled channels).", portal_id)
+            return
+        self.logger.info("EPG refresh (portal %s) started for %d IDs.", portal_id, len(epg_ids))
+        self.refresh_epg_for_ids(epg_ids)
 
     def _run_matching(self, portal_id):
         with self.channelsdvr_match_status_lock:

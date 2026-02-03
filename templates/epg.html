@@ -365,7 +365,16 @@ function refreshEPG() {
     btn.classList.add('refreshing');
     btn.disabled = true;
 
-    fetch('/api/epg/refresh', { method: 'POST' })
+    const filterValue = document.getElementById('channelSearch')?.value || '';
+    const channelIds = (epgData.channels || [])
+        .filter(ch => !filterValue || ch.name.toLowerCase().includes(filterValue.toLowerCase()))
+        .map(ch => ch.id);
+
+    fetch('/api/epg/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ epg_ids: channelIds })
+    })
         .then(response => response.json())
         .then(data => {
             if (data.status === 'started' || data.status === 'success' || data.status === 'already_running') {

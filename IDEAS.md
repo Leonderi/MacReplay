@@ -55,6 +55,7 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
   - Genre de/aktivieren ändert nur `groups.active` - kein Re-Import nötig
   - Groups werden aus DB geladen (schnell) statt Portal-API
   - Stats zeigen `active / total` für Channels und Groups
+  - ✅ Modal-API: `/api/portal/groups` (DB) + `/api/portal/genres/list` (Fallback)
 
 ### Portal-Import aus Textdateien
 - ⬜ Import von Portalen aus formatierten Scan-Ergebnis-Dateien
@@ -110,7 +111,11 @@ patterns = {
 - ✅ Editor: EPG-Quelle anzeigen (Dropdown + Hinweis)
 - ✅ Editor: EPG-Refresh pro Channel
 - ✅ Editor: EPG-Refresh nach EPG-ID Änderung beim Speichern
+- ✅ EPG-Refresh bei Portal-Refresh nur für dieses Portal
+- ✅ Partial-EPG-Rewrite: Channel-Metadaten bleiben im `<channel>` (keine losen display-name/icon)
+- ✅ Besseres EPG-Logging beim Portal-Fetch (Status/Empty/JSON-Fehler)
 - ⬜ EPG-Refresh Queue/Retry statt "already running" Fehler
+- 🔄 Hybrid-EPG: Zentrale Channel-Metadaten + Programme pro Quelle in eigener DB
 
 ---
 

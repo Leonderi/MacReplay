@@ -5,14 +5,14 @@ import time
 import subprocess
 import re
 import unicodedata
+import io
 import json
 import gzip
 import hashlib
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import xml.etree.ElementTree as ET
-import xml.dom.minidom as minidom
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -289,10 +289,450 @@ def _get_epg_sources_dir():
     return cache_dir
 
 
-def _fetch_custom_xmltv(source, logger):
+def _get_epg_source_db_path(source_id):
+    if not source_id:
+        return None
+    cache_dir = _get_epg_sources_dir()
+    return os.path.join(cache_dir, f"{source_id}.sqlite")
+
+
+def _open_epg_source_db(source_id):
+    db_path = _get_epg_source_db_path(source_id)
+    if not db_path:
+        return None
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS epg_programmes (
+            channel_id TEXT NOT NULL,
+            start TEXT,
+            stop TEXT,
+            start_ts INTEGER,
+            stop_ts INTEGER,
+            title TEXT,
+            description TEXT
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_epg_programmes_channel ON epg_programmes(channel_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_epg_programmes_start ON epg_programmes(start_ts)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_epg_programmes_stop ON epg_programmes(stop_ts)"
+    )
+    conn.commit()
+    return conn
+
+
+def _parse_xmltv_time_to_epoch(time_str):
+    if not time_str:
+        return None
+    try:
+        parts = time_str.split(" ")
+        dt_str = parts[0]
+        dt = datetime.strptime(dt_str, "%Y%m%d%H%M%S")
+        if len(parts) > 1:
+            tz_str = parts[1]
+            tz_sign = 1 if tz_str[0] == "+" else -1
+            tz_hours = int(tz_str[1:3])
+            tz_mins = int(tz_str[3:5]) if len(tz_str) >= 5 else 0
+            tz_offset = timedelta(hours=tz_sign * tz_hours, minutes=tz_sign * tz_mins)
+            dt = dt.replace(tzinfo=timezone(tz_offset))
+            dt = dt.astimezone(timezone.utc)
+        else:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except (ValueError, AttributeError, IndexError):
+        return None
+
+
+def _ensure_epg_source_record(
+    *, source_id, name, url, source_type, enabled=True, interval_hours=None, last_fetch=None, last_refresh=None
+):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO epg_sources (source_id, name, url, source_type, enabled, interval_hours, last_fetch, last_refresh)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                name = excluded.name,
+                url = excluded.url,
+                source_type = excluded.source_type,
+                enabled = excluded.enabled,
+                interval_hours = COALESCE(excluded.interval_hours, epg_sources.interval_hours),
+                last_fetch = COALESCE(excluded.last_fetch, epg_sources.last_fetch),
+                last_refresh = COALESCE(excluded.last_refresh, epg_sources.last_refresh)
+            """,
+            (
+                source_id,
+                name,
+                url,
+                source_type,
+                1 if enabled else 0,
+                interval_hours,
+                last_fetch,
+                last_refresh,
+            ),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to upsert epg_sources: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _update_epg_channels_metadata(source_id, channels):
+    if not source_id or not channels:
+        return
+    now_ts = time.time()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM epg_channel_names WHERE source_id = ?", (source_id,))
+        channel_rows = []
+        name_rows = []
+        for ch in channels:
+            channel_rows.append(
+                (
+                    source_id,
+                    ch["channel_id"],
+                    ch.get("display_name"),
+                    ch.get("icon"),
+                    ch.get("lcn"),
+                    now_ts,
+                )
+            )
+            for name in ch.get("names") or []:
+                name_rows.append((source_id, ch["channel_id"], name))
+        cursor.executemany(
+            """
+            INSERT INTO epg_channels (source_id, channel_id, display_name, icon, lcn, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id, channel_id) DO UPDATE SET
+                display_name = excluded.display_name,
+                icon = excluded.icon,
+                lcn = excluded.lcn,
+                updated_at = excluded.updated_at
+            """,
+            channel_rows,
+        )
+        if name_rows:
+            cursor.executemany(
+                """
+                INSERT OR IGNORE INTO epg_channel_names (source_id, channel_id, name)
+                VALUES (?, ?, ?)
+                """,
+                name_rows,
+            )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to update epg_channels metadata: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _rebuild_epg_channel_map_from_db():
+    mapping = {}
+    ids = set()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT c.channel_id, c.display_name, s.name as source_name, c.source_id
+            FROM epg_channels c
+            LEFT JOIN epg_sources s ON s.source_id = c.source_id
+            """
+        )
+        for row in cursor.fetchall():
+            cid = row["channel_id"]
+            ids.add(cid)
+            source_label = row["source_name"] or row["source_id"] or "portal"
+            mapping[cid] = {"name": row["display_name"] or cid, "source": source_label}
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to rebuild epg channel map from DB: {e}")
+    return mapping, ids
+
+
+def _fetch_enabled_channels_for_epg(portal_id=None):
+    rows = []
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    sql = f"""
+        SELECT
+            c.portal_id as portal_id,
+            c.channel_id,
+            c.name,
+            c.number,
+            c.logo,
+            c.custom_name,
+            c.auto_name,
+            c.matched_name,
+            c.custom_number,
+            c.custom_epg_id
+        FROM channels c
+        LEFT JOIN groups g ON c.portal_id = g.portal_id AND c.genre_id = g.genre_id
+        WHERE {ACTIVE_GROUP_CONDITION}
+    """
+    params = []
+    if portal_id:
+        sql += " AND c.portal_id = ?"
+        params.append(portal_id)
+    cursor.execute(sql, params)
+    for row in cursor.fetchall():
+        rows.append(dict(row))
+    conn.close()
+    return rows
+
+
+def _resolve_epg_meta_for_ids(epg_ids):
+    if not epg_ids:
+        return {}
+    meta = {}
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    ids = list(epg_ids)
+    chunk_size = 900
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i:i + chunk_size]
+        placeholders = ",".join(["?"] * len(chunk))
+        cursor.execute(
+            f"""
+            SELECT source_id, channel_id, display_name, icon
+            FROM epg_channels
+            WHERE channel_id IN ({placeholders})
+            """,
+            chunk,
+        )
+        for row in cursor.fetchall():
+            meta[row["channel_id"]] = {
+                "source_id": row["source_id"],
+                "display_name": row["display_name"],
+                "icon": row["icon"],
+            }
+    conn.close()
+    return meta
+
+
+def _build_xmltv_from_db(enabled_channels, *, portals, past_cutoff_ts, future_cutoff_ts):
+    epg_ids = set()
+    for ch in enabled_channels:
+        default_epg_id = effective_epg_name(ch["custom_name"], ch["auto_name"], ch["name"])
+        if default_epg_id:
+            epg_ids.add(default_epg_id)
+        if ch.get("custom_epg_id"):
+            epg_ids.add(ch["custom_epg_id"])
+
+    epg_meta = _resolve_epg_meta_for_ids(epg_ids)
+    root = ET.Element("tv")
+    seen_channel_ids = set()
+    channel_sources = {}
+
+    for ch in enabled_channels:
+        portal_id = ch["portal_id"]
+        default_epg_id = effective_epg_name(ch["custom_name"], ch["auto_name"], ch["name"])
+        custom_epg_id = ch.get("custom_epg_id") or ""
+
+        if custom_epg_id:
+            if custom_epg_id in epg_meta:
+                epg_id = custom_epg_id
+                source_id = epg_meta[custom_epg_id]["source_id"]
+            else:
+                epg_id = custom_epg_id
+                source_id = None
+        else:
+            epg_id = default_epg_id
+            source_id = epg_meta.get(epg_id, {}).get("source_id") if epg_id else None
+            if not source_id:
+                source_id = portal_id
+
+        if not epg_id or epg_id in seen_channel_ids:
+            continue
+        seen_channel_ids.add(epg_id)
+
+        display_name = epg_meta.get(epg_id, {}).get("display_name")
+        if not display_name:
+            display_name = effective_display_name(
+                ch["custom_name"], ch["matched_name"], ch["auto_name"], ch["name"]
+            )
+        icon = epg_meta.get(epg_id, {}).get("icon") or ch.get("logo") or ""
+
+        channel_ele = ET.SubElement(root, "channel", id=epg_id)
+        ET.SubElement(channel_ele, "display-name").text = display_name or epg_id
+        if icon:
+            ET.SubElement(channel_ele, "icon", src=icon)
+
+        if source_id:
+            channel_sources.setdefault(source_id, set()).add(epg_id)
+
+    for source_id, ids in channel_sources.items():
+        conn = _open_epg_source_db(source_id)
+        if conn is None:
+            continue
+        cursor = conn.cursor()
+        id_list = list(ids)
+        chunk_size = 900
+        for i in range(0, len(id_list), chunk_size):
+            chunk = id_list[i:i + chunk_size]
+            placeholders = ",".join(["?"] * len(chunk))
+            cursor.execute(
+                f"""
+                SELECT channel_id, start, stop, start_ts, stop_ts, title, description
+                FROM epg_programmes
+                WHERE channel_id IN ({placeholders})
+                  AND stop_ts >= ?
+                  AND start_ts <= ?
+                ORDER BY start_ts ASC
+                """,
+                [*chunk, int(past_cutoff_ts), int(future_cutoff_ts)],
+            )
+            for row in cursor.fetchall():
+                prog_ele = ET.SubElement(
+                    root,
+                    "programme",
+                    channel=row["channel_id"],
+                    start=row["start"] or "",
+                    stop=row["stop"] or "",
+                )
+                ET.SubElement(prog_ele, "title").text = row["title"] or ""
+                if row["description"]:
+                    ET.SubElement(prog_ele, "desc").text = row["description"]
+        conn.close()
+
+    return ET.tostring(root, encoding="unicode"), seen_channel_ids
+
+
+def _store_portal_epg_to_db(
+    *,
+    portal_id,
+    portal_name,
+    portal_url,
+    enabled_channels,
+    epg,
+    portal_epg_offset,
+    past_cutoff_ts,
+    future_cutoff_ts,
+):
+    source_id = portal_id
+    _ensure_epg_source_record(
+        source_id=source_id,
+        name=portal_name,
+        url=portal_url,
+        source_type="portal",
+        enabled=True,
+        interval_hours=get_epg_refresh_interval(),
+        last_fetch=time.time(),
+        last_refresh=time.time(),
+    )
+
+    channel_rows = []
+    programme_rows = []
+    offset_seconds = int(portal_epg_offset) * 3600
+
+    if not epg:
+        logger.warning("Portal EPG missing for %s; storing channel metadata only.", portal_name)
+
+    for ch in enabled_channels:
+        epg_id = effective_epg_name(
+            ch["custom_name"], ch["auto_name"], ch["name"]
+        )
+        if not epg_id:
+            continue
+        display_name = effective_display_name(
+            ch["custom_name"], ch["matched_name"], ch["auto_name"], ch["name"]
+        )
+        lcn = ch["custom_number"] if ch["custom_number"] else str(ch["number"])
+        channel_rows.append(
+            {
+                "channel_id": epg_id,
+                "display_name": display_name or epg_id,
+                "icon": ch.get("logo") or "",
+                "lcn": lcn,
+                "names": [display_name] if display_name else [],
+            }
+        )
+
+        if not epg:
+            continue
+        channel_id = str(ch["channel_id"])
+        programmes = epg.get(channel_id) if isinstance(epg, dict) else None
+        if not programmes:
+            continue
+
+        for p in programmes:
+            start_ts = p.get("start_timestamp")
+            stop_ts = p.get("stop_timestamp")
+            if start_ts is None or stop_ts is None:
+                continue
+            try:
+                start_ts = int(start_ts)
+                stop_ts = int(stop_ts)
+            except (TypeError, ValueError):
+                continue
+            if start_ts > 10**11 or stop_ts > 10**11:
+                start_ts = int(start_ts / 1000)
+                stop_ts = int(stop_ts / 1000)
+            start_ts = start_ts + offset_seconds
+            stop_ts = stop_ts + offset_seconds
+            if stop_ts < past_cutoff_ts or start_ts > future_cutoff_ts:
+                continue
+            start_str = datetime.utcfromtimestamp(start_ts).strftime("%Y%m%d%H%M%S") + " +0000"
+            stop_str = datetime.utcfromtimestamp(stop_ts).strftime("%Y%m%d%H%M%S") + " +0000"
+            programme_rows.append(
+                (
+                    epg_id,
+                    start_str,
+                    stop_str,
+                    start_ts,
+                    stop_ts,
+                    p.get("name") or display_name or "",
+                    p.get("descr") or "",
+                )
+            )
+
+    _update_epg_channels_metadata(source_id, channel_rows)
+
+    conn = _open_epg_source_db(source_id)
+    if conn is None:
+        return
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM epg_programmes")
+    if programme_rows:
+        cursor.executemany(
+            """
+            INSERT INTO epg_programmes (channel_id, start, stop, start_ts, stop_ts, title, description)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            programme_rows,
+        )
+    conn.commit()
+    conn.close()
+    logger.info(
+        "Stored portal EPG for %s: channels=%d programmes=%d",
+        portal_name,
+        len(channel_rows),
+        len(programme_rows),
+    )
+
+
+def _resolve_custom_source_cache(source):
     url = (source.get("url") or "").strip()
     if not url:
-        return None
+        return None, None
 
     source_id = (source.get("id") or "").strip()
     if not source_id:
@@ -301,6 +741,28 @@ def _fetch_custom_xmltv(source, logger):
     cache_dir = _get_epg_sources_dir()
     cache_path = os.path.join(cache_dir, f"{source_id}.xml")
     meta_path = cache_path + ".meta"
+    return cache_path, meta_path
+
+
+def _read_custom_xmltv_from_cache(source):
+    cache_path, _ = _resolve_custom_source_cache(source)
+    if not cache_path or not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def _fetch_custom_xmltv(source, logger):
+    url = (source.get("url") or "").strip()
+    if not url:
+        return None
+
+    cache_path, meta_path = _resolve_custom_source_cache(source)
+    if not cache_path or not meta_path:
+        return None
     try:
         interval_hours = float(source.get("interval", source.get("interval_hours", 24)) or 24)
     except (TypeError, ValueError):
@@ -319,8 +781,7 @@ def _fetch_custom_xmltv(source, logger):
 
     if use_cache:
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                return f.read()
+            return _read_custom_xmltv_from_cache(source)
         except Exception:
             return None
 
@@ -339,11 +800,7 @@ def _fetch_custom_xmltv(source, logger):
     except (HTTPError, URLError, OSError, ValueError) as e:
         logger.warning(f"Failed to fetch custom EPG source {url}: {e}")
         if os.path.exists(cache_path):
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    return f.read()
-            except Exception:
-                return None
+            return _read_custom_xmltv_from_cache(source)
         return None
 
 
@@ -358,77 +815,384 @@ def refresh_custom_sources(source_ids=None):
     if not sources:
         return False
 
-    global cached_xmltv, last_updated
-    if cached_xmltv is None:
-        cached_xmltv, last_updated, _ = load_epg_cache(logger, EPG_CACHE_PATH)
+    epg_future_hours = int(settings.get("epg future hours", "24"))
+    epg_past_hours = int(settings.get("epg past hours", "2"))
+    now_ts = int(time.time())
+    past_cutoff = now_ts - (epg_past_hours * 3600)
+    future_cutoff = now_ts + (epg_future_hours * 3600)
 
-    if cached_xmltv:
-        try:
-            root = ET.fromstring(cached_xmltv)
-        except Exception:
-            root = ET.Element("tv")
-    else:
-        root = ET.Element("tv")
-
-    existing_channels = {ch.get("id") for ch in root.findall("channel") if ch.get("id")}
-
-    source_map = {}
     for source in sources:
+        url = (source.get("url") or "").strip()
+        if not url:
+            continue
+        source_id = (source.get("id") or "").strip()
+        if not source_id:
+            source_id = hashlib.sha1(url.encode("utf-8")).hexdigest()
+        source_label = source.get("name") or url or source_id or "custom"
+        interval_hours = source.get("interval", source.get("interval_hours", 24))
+
         xml_text = _fetch_custom_xmltv(source, logger)
-        if not xml_text:
+        cache_path, meta_path = _resolve_custom_source_cache(source)
+        if not xml_text or not cache_path:
+            continue
+
+        last_fetch = None
+        if meta_path and os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    last_fetch = float(f.read().strip())
+            except Exception:
+                last_fetch = None
+
+        _ensure_epg_source_record(
+            source_id=source_id,
+            name=source_label,
+            url=url,
+            source_type="custom",
+            enabled=True,
+            interval_hours=interval_hours,
+            last_fetch=last_fetch,
+            last_refresh=time.time(),
+        )
+
+        channels = []
+        programme_rows = []
+        source_db = _open_epg_source_db(source_id)
+        if not source_db:
             continue
         try:
-            source_root = ET.fromstring(xml_text)
+            cursor = source_db.cursor()
+            cursor.execute("DELETE FROM epg_programmes")
+            source_db.commit()
+
+            for _, elem in ET.iterparse(cache_path, events=("end",)):
+                if elem.tag == "channel":
+                    cid = (elem.get("id") or "").strip()
+                    if not cid:
+                        elem.clear()
+                        continue
+                    display_names = [dn.text.strip() for dn in elem.findall("display-name") if dn.text]
+                    display_name = display_names[0] if display_names else cid
+                    icon = None
+                    icon_elem = elem.find("icon")
+                    if icon_elem is not None and icon_elem.get("src"):
+                        icon = icon_elem.get("src")
+                    lcn = elem.findtext("lcn")
+                    channels.append(
+                        {
+                            "channel_id": cid,
+                            "display_name": display_name,
+                            "icon": icon,
+                            "lcn": lcn,
+                            "names": display_names,
+                        }
+                    )
+                    elem.clear()
+                    continue
+
+                if elem.tag == "programme":
+                    channel_attr = (elem.get("channel") or "").strip()
+                    if not channel_attr:
+                        elem.clear()
+                        continue
+                    start_attr = elem.get("start")
+                    stop_attr = elem.get("stop")
+                    start_ts = _parse_xmltv_time_to_epoch(start_attr)
+                    stop_ts = _parse_xmltv_time_to_epoch(stop_attr)
+                    if stop_ts is not None and stop_ts < past_cutoff:
+                        elem.clear()
+                        continue
+                    if start_ts is not None and start_ts > future_cutoff:
+                        elem.clear()
+                        continue
+                    title = elem.findtext("title") or ""
+                    desc = elem.findtext("desc") or ""
+                    programme_rows.append(
+                        (channel_attr, start_attr, stop_attr, start_ts, stop_ts, title, desc)
+                    )
+                    if len(programme_rows) >= 500:
+                        cursor.executemany(
+                            """
+                            INSERT INTO epg_programmes
+                            (channel_id, start, stop, start_ts, stop_ts, title, description)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            programme_rows,
+                        )
+                        source_db.commit()
+                        programme_rows = []
+                    elem.clear()
+
+            if programme_rows:
+                cursor.executemany(
+                    """
+                    INSERT INTO epg_programmes
+                    (channel_id, start, stop, start_ts, stop_ts, title, description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    programme_rows,
+                )
+                source_db.commit()
         except Exception as e:
-            logger.warning(f"Invalid XMLTV content from custom source: {e}")
-            continue
-        source_label = source.get("name") or source.get("url") or source.get("id") or "custom"
+            logger.warning(f"Failed to parse/store custom EPG source {source_label}: {e}")
+        finally:
+            try:
+                source_db.close()
+            except Exception:
+                pass
 
-        for channel in source_root.findall("channel"):
-            cid = channel.get("id")
-            if not cid:
-                continue
-            source_map[cid] = source_label
-            if cid in existing_channels:
-                continue
-            existing_channels.add(cid)
-            channel_ele = ET.SubElement(root, "channel", id=cid)
-            display_name = channel.findtext("display-name") or cid
-            ET.SubElement(channel_ele, "display-name").text = display_name
-            icon = channel.find("icon")
-            if icon is not None and icon.get("src"):
-                ET.SubElement(channel_ele, "icon", src=icon.get("src"))
+        _update_epg_channels_metadata(source_id, channels)
 
-    seen_programmes = set()
-    for programme in root.findall("programme"):
-        prog_key = (
-            programme.get("channel"),
-            programme.get("start"),
-            programme.get("stop"),
-        )
-        if prog_key not in seen_programmes:
-            seen_programmes.add(prog_key)
-
-    rough_string = ET.tostring(root, encoding="unicode")
-    reparsed = minidom.parseString(rough_string)
-    formatted_xmltv = "\n".join(
-        [line for line in reparsed.toprettyxml(indent="  ").splitlines() if line.strip()]
-    )
-
-    cached_xmltv = formatted_xmltv
-    last_updated = time.time()
-    epg_map = _apply_epg_source_map(
-        _parse_epg_channel_map(formatted_xmltv),
-        source_map=source_map,
-        default_source="portal",
-    )
-    _set_epg_channel_ids(set(epg_map.keys()))
-    _set_epg_channel_map(epg_map)
-    save_epg_cache(cached_xmltv, last_updated, logger, EPG_CACHE_PATH)
+    epg_map, epg_ids = _rebuild_epg_channel_map_from_db()
+    if epg_map:
+        _set_epg_channel_map(epg_map)
+        _set_epg_channel_ids(epg_ids)
     return True
 
 
-def refresh_xmltv_for_epg_ids(epg_ids):
+def _format_start_tag(tag, attrib):
+    if not attrib:
+        return f"<{tag}>"
+    attrs = " ".join(f'{key}="{value}"' for key, value in attrib.items())
+    return f"<{tag} {attrs}>"
+
+def _ensure_channel_display_name(elem, cid, fallback_name=None):
+    display_name = elem.find("display-name")
+    current_text = display_name.text.strip() if display_name is not None and display_name.text else ""
+    if current_text:
+        return current_text
+    name_value = fallback_name or cid or ""
+    if display_name is None:
+        display_name = ET.SubElement(elem, "display-name")
+    display_name.text = name_value
+    return name_value
+
+def _get_channel_metadata_map(epg_ids):
+    metadata = {}
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT portal_id, name, custom_name, matched_name, auto_name, custom_epg_id, logo
+            FROM channels
+            """
+        )
+        for row in cursor.fetchall():
+            epg_id = row["custom_epg_id"] if row["custom_epg_id"] else effective_epg_name(
+                row["custom_name"], row["auto_name"], row["name"]
+            )
+            if not epg_id or epg_id not in epg_ids:
+                continue
+            display_name = effective_display_name(
+                row["custom_name"], row["matched_name"], row["auto_name"], row["name"]
+            )
+            metadata[epg_id] = {
+                "name": display_name or epg_id,
+                "logo": row["logo"] or "",
+            }
+    except Exception as e:
+        logger.warning(f"Failed to build channel metadata map: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return metadata
+
+
+def _iterparse_source(xml_text=None, file_path=None):
+    if file_path:
+        return ET.iterparse(file_path, events=("end",))
+    return ET.iterparse(io.StringIO(xml_text or ""), events=("end",))
+
+
+def _write_partial_epg_cache(
+    *,
+    epg_ids,
+    replace_ids,
+    custom_sources,
+    past_cutoff,
+    cache_only,
+):
+    cache_path = EPG_CACHE_PATH
+    tmp_path = cache_path + ".tmp"
+    existing_channels = set()
+    source_map = {}
+    channel_name_map = {}
+    channel_meta_map = _get_channel_metadata_map(epg_ids)
+    added_programmes = 0
+    root_tag = "tv"
+    root_attrib = {}
+    wrote_root = False
+
+    with open(tmp_path, "w", encoding="utf-8") as out:
+        out.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+
+        if os.path.exists(cache_path):
+            tag_stack = []
+            for event, elem in ET.iterparse(cache_path, events=("start", "end")):
+                if event == "start":
+                    tag_stack.append(elem.tag)
+                    if not wrote_root:
+                        root_tag = elem.tag
+                        root_attrib = dict(elem.attrib)
+                        out.write(_format_start_tag(root_tag, root_attrib))
+                        wrote_root = True
+                    continue
+
+                if event != "end":
+                    continue
+
+                parent_tag = tag_stack[-2] if len(tag_stack) > 1 else None
+
+                if elem.tag == root_tag:
+                    tag_stack.pop()
+                    continue
+
+                if elem.tag == "channel":
+                    cid = elem.get("id")
+                    if cid:
+                        if cid in replace_ids:
+                            elem.clear()
+                            tag_stack.pop()
+                            continue
+                        existing_channels.add(cid)
+                        meta = channel_meta_map.get(cid)
+                        _ensure_channel_display_name(elem, cid, fallback_name=meta["name"] if meta else None)
+                        if meta and meta.get("logo"):
+                            icon = elem.find("icon")
+                            if icon is None:
+                                icon = ET.SubElement(elem, "icon")
+                            if not icon.get("src"):
+                                icon.set("src", meta["logo"])
+                    out.write(ET.tostring(elem, encoding="unicode"))
+                elif elem.tag == "programme":
+                    channel_attr = elem.get("channel")
+                    if channel_attr in replace_ids:
+                        elem.clear()
+                        tag_stack.pop()
+                        continue
+                    out.write(ET.tostring(elem, encoding="unicode"))
+                elif parent_tag == root_tag:
+                    out.write(ET.tostring(elem, encoding="unicode"))
+
+                elem.clear()
+                tag_stack.pop()
+
+        if not wrote_root:
+            out.write(_format_start_tag(root_tag, root_attrib))
+
+        for source in custom_sources:
+            if source.get("enabled") in [False, "false"]:
+                continue
+
+            source_label = source.get("name") or source.get("url") or source.get("id") or "custom"
+            source_path = None
+            xml_text = None
+
+            if cache_only:
+                cache_path_source, _ = _resolve_custom_source_cache(source)
+                if cache_path_source and os.path.exists(cache_path_source):
+                    source_path = cache_path_source
+                else:
+                    logger.info(
+                        "Skipping custom source %s (not cached yet)",
+                        source_label,
+                    )
+                    continue
+            else:
+                xml_text = _fetch_custom_xmltv(source, logger)
+                if not xml_text:
+                    continue
+
+            try:
+                for _, elem in _iterparse_source(xml_text=xml_text, file_path=source_path):
+                    if elem.tag == "channel":
+                        cid = elem.get("id")
+                        if not cid:
+                            elem.clear()
+                            continue
+                        if cid in replace_ids:
+                            source_map[cid] = source_label
+                            if cid not in existing_channels:
+                                existing_channels.add(cid)
+                                display_name = _ensure_channel_display_name(
+                                    elem,
+                                    cid,
+                                    fallback_name=elem.findtext("display-name") or cid,
+                                )
+                                channel_name_map[cid] = display_name
+                                icon = elem.find("icon")
+                                if icon is not None and not icon.get("src"):
+                                    elem.remove(icon)
+                                out.write(ET.tostring(elem, encoding="unicode"))
+                        elem.clear()
+                        continue
+
+                    if elem.tag == "programme":
+                        channel_attr = elem.get("channel")
+                        if channel_attr not in epg_ids:
+                            elem.clear()
+                            continue
+                        stop_attr = elem.get("stop")
+                        if stop_attr:
+                            try:
+                                stop_time = datetime.strptime(stop_attr.split(" ")[0], "%Y%m%d%H%M%S")
+                                if stop_time < past_cutoff:
+                                    elem.clear()
+                                    continue
+                            except ValueError:
+                                pass
+                        out.write(ET.tostring(elem, encoding="unicode"))
+                        added_programmes += 1
+                        elem.clear()
+            except Exception as e:
+                logger.warning(f"Invalid XMLTV content from custom source: {e}")
+                continue
+
+        for cid in epg_ids:
+            if cid in existing_channels or cid not in replace_ids:
+                continue
+            meta = channel_meta_map.get(cid, {})
+            channel_ele = ET.Element("channel", id=cid)
+            display_name = meta.get("name") or cid
+            ET.SubElement(channel_ele, "display-name").text = display_name
+            logo = meta.get("logo") or ""
+            if logo:
+                ET.SubElement(channel_ele, "icon", src=logo)
+            out.write(ET.tostring(channel_ele, encoding="unicode"))
+            existing_channels.add(cid)
+            channel_name_map[cid] = display_name
+
+        out.write(f"</{root_tag}>")
+
+    os.replace(tmp_path, cache_path)
+    return added_programmes, source_map, channel_name_map
+
+
+def _build_epg_channel_map_from_cache(cache_path):
+    mapping = {}
+    ids = set()
+    if not os.path.exists(cache_path):
+        return mapping, ids
+    try:
+        for _, elem in ET.iterparse(cache_path, events=("end",)):
+            if elem.tag != "channel":
+                elem.clear()
+                continue
+            cid = elem.get("id")
+            if cid:
+                ids.add(cid)
+                display_name = elem.findtext("display-name") or cid
+                mapping[cid] = {"name": display_name, "source": "portal"}
+            elem.clear()
+    except Exception as e:
+        logger.error(f"Error building channel map from cache: {e}")
+    return mapping, ids
+
+
+def refresh_xmltv_for_epg_ids(epg_ids, *, cache_only=False):
     if not epg_ids:
         return False, "No EPG IDs provided"
 
@@ -444,96 +1208,37 @@ def refresh_xmltv_for_epg_ids(epg_ids):
         if not epg_ids:
             return False, "No valid EPG IDs provided"
 
-        logger.info("EPG refresh (custom sources) started for %d IDs", len(epg_ids))
+        logger.info(
+            "EPG cache rebuild started for %d IDs (db-only)",
+            len(epg_ids),
+        )
+
         settings = getSettings()
-        custom_sources = _parse_custom_sources(settings)
         past_hours = int(settings.get("epg past hours", "2"))
-        past_cutoff = datetime.utcnow() - timedelta(hours=past_hours)
+        future_hours = int(settings.get("epg future hours", "24"))
+        past_cutoff_ts = int((datetime.utcnow() - timedelta(hours=past_hours)).timestamp())
+        future_cutoff_ts = int((datetime.utcnow() + timedelta(hours=future_hours)).timestamp())
+
+        enabled_rows = _fetch_enabled_channels_for_epg()
+        xmltv_text, channel_ids = _build_xmltv_from_db(
+            enabled_rows,
+            portals=getPortals(),
+            past_cutoff_ts=past_cutoff_ts,
+            future_cutoff_ts=future_cutoff_ts,
+        )
 
         global cached_xmltv, last_updated
-        if cached_xmltv is None:
-            cached_xmltv, last_updated, _ = load_epg_cache(logger, EPG_CACHE_PATH)
-
-        if cached_xmltv:
-            try:
-                root = ET.fromstring(cached_xmltv)
-            except Exception:
-                root = ET.Element("tv")
-        else:
-            root = ET.Element("tv")
-
-        existing_channels = {ch.get("id") for ch in root.findall("channel") if ch.get("id")}
-        for programme in list(root.findall("programme")):
-            channel_attr = programme.get("channel")
-            if channel_attr in epg_ids:
-                root.remove(programme)
-
-        source_map = {}
-        added_programmes = 0
-        for source in custom_sources:
-            if source.get("enabled") in [False, "false"]:
-                continue
-            xml_text = _fetch_custom_xmltv(source, logger)
-            if not xml_text:
-                continue
-            try:
-                source_root = ET.fromstring(xml_text)
-            except Exception as e:
-                logger.warning(f"Invalid XMLTV content from custom source: {e}")
-                continue
-
-            source_label = source.get("name") or source.get("url") or source.get("id") or "custom"
-
-            for channel in source_root.findall("channel"):
-                cid = channel.get("id")
-                if not cid:
-                    continue
-                if cid in epg_ids:
-                    source_map[cid] = source_label
-                if cid in existing_channels or cid not in epg_ids:
-                    continue
-                existing_channels.add(cid)
-                channel_ele = ET.SubElement(root, "channel", id=cid)
-                display_name = channel.findtext("display-name") or cid
-                ET.SubElement(channel_ele, "display-name").text = display_name
-                icon = channel.find("icon")
-                if icon is not None and icon.get("src"):
-                    ET.SubElement(channel_ele, "icon", src=icon.get("src"))
-
-            for programme in source_root.findall("programme"):
-                channel_attr = programme.get("channel")
-                if channel_attr not in epg_ids:
-                    continue
-                stop_attr = programme.get("stop")
-                if stop_attr:
-                    try:
-                        stop_time = datetime.strptime(stop_attr.split(" ")[0], "%Y%m%d%H%M%S")
-                        if stop_time < past_cutoff:
-                            continue
-                    except ValueError:
-                        pass
-                root.append(ET.fromstring(ET.tostring(programme, encoding="unicode")))
-                added_programmes += 1
-
-        rough_string = ET.tostring(root, encoding="unicode")
-        reparsed = minidom.parseString(rough_string)
-        formatted_xmltv = "\n".join(
-            [line for line in reparsed.toprettyxml(indent="  ").splitlines() if line.strip()]
-        )
-
-        cached_xmltv = formatted_xmltv
+        cached_xmltv = xmltv_text
         last_updated = time.time()
-        epg_map = _apply_epg_source_map(
-            _parse_epg_channel_map(formatted_xmltv),
-            source_map=source_map,
-            default_source="portal",
-        )
-        _set_epg_channel_ids(set(epg_map.keys()))
-        _set_epg_channel_map(epg_map)
         save_epg_cache(cached_xmltv, last_updated, logger, EPG_CACHE_PATH)
 
-        logger.info("EPG refresh (custom sources) completed: %d programmes added", added_programmes)
-        return True, f"Updated {added_programmes} programmes"
+        epg_map, epg_ids = _rebuild_epg_channel_map_from_db()
+        _set_epg_channel_ids(epg_ids if epg_ids else set(channel_ids))
+        if epg_map:
+            _set_epg_channel_map(epg_map)
+
+        logger.info("EPG cache rebuild completed (db-only)")
+        return True, "EPG cache rebuilt from DB"
     except Exception as e:
         epg_refresh_status["last_error"] = str(e)
         logger.error(f"Error refreshing EPG for IDs: {e}")
@@ -1525,6 +2230,8 @@ def extract_channel_tags(raw_name, tag_config, settings=None, allow_match=True):
         "country": country,
         "event_tags": ",".join(event_tags),
         "misc_tags": ",".join(misc_tags),
+        "event_tags_list": event_tags,
+        "misc_tags_list": misc_tags,
         "matched_name": matched_name,
         "matched_source": matched_source,
         "matched_station_id": matched_station_id,
@@ -1543,8 +2250,26 @@ def effective_display_name(custom_name, matched_name, auto_name, name):
 
 
 def effective_epg_name(custom_name, auto_name, name):
-    """Return preferred EPG name: custom > auto > original."""
-    return custom_name or auto_name or name
+    """Return preferred EPG name: original channel name (stable)."""
+    return name
+
+
+def sync_channel_tags(cursor, portal_id, channel_id, event_tags, misc_tags):
+    """Replace channel tags for a channel using normalized tag storage."""
+    cursor.execute(
+        "DELETE FROM channel_tags WHERE portal_id = ? AND channel_id = ?",
+        (portal_id, channel_id),
+    )
+    rows = []
+    for value in event_tags or []:
+        rows.append((portal_id, channel_id, "event", value))
+    for value in misc_tags or []:
+        rows.append((portal_id, channel_id, "misc", value))
+    if rows:
+        cursor.executemany(
+            "INSERT OR IGNORE INTO channel_tags (portal_id, channel_id, tag_type, tag_value) VALUES (?, ?, ?, ?)",
+            rows,
+        )
 
 
 def score_mac_for_selection(mac, mac_data, occupied_list, streams_per_mac):
@@ -2207,6 +2932,8 @@ def refresh_channels_cache(target_portal_id=None):
                 country = tag_info["country"]
                 event_tags = tag_info["event_tags"]
                 misc_tags = tag_info["misc_tags"]
+                event_tags_list = tag_info.get("event_tags_list", [])
+                misc_tags_list = tag_info.get("misc_tags_list", [])
                 matched_name = tag_info["matched_name"]
                 matched_source = tag_info["matched_source"]
                 matched_station_id = tag_info.get("matched_station_id", "")
@@ -2336,6 +3063,8 @@ def refresh_channels_cache(target_portal_id=None):
                         available_macs, alternate_ids, cmd, channel_hash
                     ))
 
+                sync_channel_tags(cursor, portal_id, channel_id, event_tags_list, misc_tags_list)
+
                 if channel_id in existing_hashes:
                     channels_updated += 1
                 else:
@@ -2350,6 +3079,10 @@ def refresh_channels_cache(target_portal_id=None):
                         placeholders = ",".join(["?"] * len(chunk))
                         cursor.execute(
                             f"DELETE FROM channels WHERE portal_id = ? AND channel_id IN ({placeholders})",
+                            [portal_id, *chunk],
+                        )
+                        cursor.execute(
+                            f"DELETE FROM channel_tags WHERE portal_id = ? AND channel_id IN ({placeholders})",
                             [portal_id, *chunk],
                         )
                         channels_deleted += len(chunk)
@@ -2502,87 +3235,24 @@ def refresh_xmltv():
 
     epg_future_hours = int(settings.get("epg future hours", "24"))
     epg_past_hours = int(settings.get("epg past hours", "2"))
-    custom_sources = _parse_custom_sources(settings)
 
-    user_dir = os.path.expanduser("~")
-    cache_dir = os.path.join(user_dir, "Evilvir.us")
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, "MacReplayEPG.xml")
+    portals = getPortals()
 
     past_cutoff = datetime.utcnow() - timedelta(hours=epg_past_hours)
-    past_cutoff_str = past_cutoff.strftime("%Y%m%d%H%M%S") + " +0000"
+    future_cutoff = datetime.utcnow() + timedelta(hours=epg_future_hours)
+    past_cutoff_ts = int(past_cutoff.timestamp())
+    future_cutoff_ts = int(future_cutoff.timestamp())
 
-    cached_programmes = []
-    if os.path.exists(cache_file):
-        try:
-            tree = ET.parse(cache_file)
-            root = tree.getroot()
-            for programme in root.findall("programme"):
-                stop_attr = programme.get("stop")
-                if stop_attr:
-                    try:
-                        stop_time = datetime.strptime(stop_attr.split(" ")[0], "%Y%m%d%H%M%S")
-                        if stop_time >= past_cutoff:
-                            cached_programmes.append(
-                                ET.tostring(programme, encoding="unicode")
-                            )
-                    except ValueError:
-                        logger.warning(
-                            f"Invalid stop time format in cached programme: {stop_attr}. Skipping."
-                        )
-            logger.info("Loaded existing programme data from cache.")
-        except Exception as e:
-            logger.error(f"Failed to load cache file: {e}")
-
-    channels_xml = ET.Element("tv")
-    programmes = ET.Element("tv")
-    portals = getPortals()
-    source_map = {}
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT
-            c.portal_id as portal, c.channel_id, c.name, c.number, c.logo,
-            c.custom_name, c.auto_name, c.matched_name, c.custom_number, c.custom_epg_id
-        FROM channels c
-        LEFT JOIN groups g ON c.portal_id = g.portal_id AND c.genre_id = g.genre_id
-        WHERE {ACTIVE_GROUP_CONDITION}
-        """
-    )
-
+    enabled_rows = _fetch_enabled_channels_for_epg()
     enabled_by_portal = {}
-    enabled_epg_ids = set()
-    for row in cursor.fetchall():
-        portal_id = row["portal"]
-        if portal_id not in enabled_by_portal:
-            enabled_by_portal[portal_id] = []
-        enabled_by_portal[portal_id].append(
-            {
-                "channel_id": row["channel_id"],
-                "name": row["name"],
-                "number": row["number"],
-                "logo": row["logo"],
-                "custom_name": row["custom_name"],
-                "auto_name": row["auto_name"],
-                "matched_name": row["matched_name"],
-                "custom_number": row["custom_number"],
-                "custom_epg_id": row["custom_epg_id"],
-            }
-        )
-        epg_id = row["custom_epg_id"] if row["custom_epg_id"] else effective_epg_name(
-            row["custom_name"], row["auto_name"], row["name"]
-        )
-        if epg_id:
-            enabled_epg_ids.add(epg_id)
-    conn.close()
+    for row in enabled_rows:
+        portal_id = row["portal_id"]
+        enabled_by_portal.setdefault(portal_id, []).append(row)
 
     logger.info(
         f"Found {sum(len(v) for v in enabled_by_portal.values())} enabled channels across {len(enabled_by_portal)} portals"
     )
 
-    seen_channel_ids = set()
     for portal_id in enabled_by_portal:
         if portal_id not in portals:
             logger.warning(f"Portal {portal_id} not found in config, skipping")
@@ -2596,14 +3266,13 @@ def refresh_xmltv():
         fetch_epg = portal.get("fetch epg", "true") == "true"
         portal_epg_offset = int(portal.get("epg offset", 0))
 
-        if fetch_epg:
-            logger.info(
-                f"Fetching EPG | Portal: {portal_name} | offset: {portal_epg_offset} | channels: {len(enabled_by_portal[portal_id])}"
-            )
-        else:
-            logger.info(
-                f"Skipping EPG fetch for Portal: {portal_name} (disabled) | channels: {len(enabled_by_portal[portal_id])}"
-            )
+        logger.info(
+            "%s EPG | Portal: %s | offset: %s | channels: %s",
+            "Fetching" if fetch_epg else "Skipping",
+            portal_name,
+            portal_epg_offset,
+            len(enabled_by_portal[portal_id]),
+        )
 
         url = portal["url"]
         macs = list(portal["macs"].keys())
@@ -2614,196 +3283,125 @@ def refresh_xmltv():
             for mac in macs:
                 try:
                     token = stb.getToken(url, mac, proxy)
+                    if not token:
+                        logger.warning("EPG fetch: token missing for MAC %s (portal %s)", mac, portal_name)
+                        continue
                     stb.getProfile(url, mac, token, proxy)
                     stb.getAllChannels(url, mac, token, proxy)
                     epg = stb.getEpg(url, mac, token, epg_future_hours, proxy)
                     if epg:
-                        logger.info(f"Successfully fetched EPG from MAC {mac}")
+                        logger.info("Successfully fetched EPG from MAC %s", mac)
                         break
+                    logger.warning("EPG fetch returned empty data for MAC %s (portal %s)", mac, portal_name)
                 except Exception as e:
-                    logger.error(f"Error fetching data for MAC {mac}: {e}")
+                    logger.error("Error fetching data for MAC %s: %s", mac, e)
                     continue
 
-            if not epg:
-                logger.warning(
-                    f"Could not fetch EPG for portal {portal_name}, creating dummy entries"
-                )
-
-        for ch in enabled_by_portal[portal_id]:
-            try:
-                channelId = str(ch["channel_id"])
-                channelName = effective_display_name(
-                    ch["custom_name"], ch["matched_name"], ch["auto_name"], ch["name"]
-                )
-                channelNumber = (
-                    ch["custom_number"] if ch["custom_number"] else str(ch["number"])
-                )
-                epgId = ch["custom_epg_id"] if ch["custom_epg_id"] else effective_epg_name(
-                    ch["custom_name"], ch["auto_name"], ch["name"]
-                )
-                channelLogo = ch["logo"] or ""
-
-                if epgId in seen_channel_ids:
-                    logger.debug(
-                        f"Skipping duplicate channel: {channelName} (epgId: {epgId})"
-                    )
-                    continue
-                seen_channel_ids.add(epgId)
-
-                channelEle = ET.SubElement(channels_xml, "channel", id=epgId)
-                ET.SubElement(channelEle, "display-name").text = channelName
-                if channelLogo:
-                    ET.SubElement(channelEle, "icon", src=channelLogo)
-
-                if not epg or channelId not in epg or not epg.get(channelId):
-                    logger.debug(
-                        f"No EPG data found for channel {channelName} (ID: {channelId}), creating dummy entry"
-                    )
-                    start_time = datetime.utcnow().replace(
-                        minute=0, second=0, microsecond=0
-                    )
-                    stop_time = start_time + timedelta(hours=24)
-                    start = start_time.strftime("%Y%m%d%H%M%S") + " +0000"
-                    stop = stop_time.strftime("%Y%m%d%H%M%S") + " +0000"
-                    programmeEle = ET.SubElement(
-                        programmes,
-                        "programme",
-                        start=start,
-                        stop=stop,
-                        channel=epgId,
-                    )
-                    ET.SubElement(programmeEle, "title").text = channelName
-                    ET.SubElement(programmeEle, "desc").text = channelName
-                else:
-                    for p in epg.get(channelId):
-                        try:
-                            start_time = datetime.utcfromtimestamp(
-                                p.get("start_timestamp")
-                            ) + timedelta(hours=portal_epg_offset)
-                            stop_time = datetime.utcfromtimestamp(
-                                p.get("stop_timestamp")
-                            ) + timedelta(hours=portal_epg_offset)
-                            start = start_time.strftime("%Y%m%d%H%M%S") + " +0000"
-                            stop = stop_time.strftime("%Y%m%d%H%M%S") + " +0000"
-                            if start <= past_cutoff_str:
-                                continue
-                            programmeEle = ET.SubElement(
-                                programmes,
-                                "programme",
-                                start=start,
-                                stop=stop,
-                                channel=epgId,
-                            )
-                            ET.SubElement(programmeEle, "title").text = p.get("name")
-                            ET.SubElement(programmeEle, "desc").text = p.get("descr")
-                        except Exception as e:
-                            logger.error(
-                                f"Error processing programme for channel {channelName} (ID: {channelId}): {e}"
-                            )
-            except Exception as e:
-                logger.error(f"Error processing channel {ch}: {e}")
-
-    for source in custom_sources:
-        if source.get("enabled") in [False, "false"]:
-            continue
-        xml_text = _fetch_custom_xmltv(source, logger)
-        if not xml_text:
-            continue
-        try:
-            root = ET.fromstring(xml_text)
-        except Exception as e:
-            logger.warning(f"Invalid XMLTV content from custom source: {e}")
-            continue
-        source_label = source.get("name") or source.get("url") or source.get("id") or "custom"
-
-        for channel in root.findall("channel"):
-            cid = channel.get("id")
-            if not cid or cid in seen_channel_ids:
-                if cid:
-                    source_map[cid] = source_label
-                continue
-            seen_channel_ids.add(cid)
-            source_map[cid] = source_label
-            channel_ele = ET.SubElement(channels_xml, "channel", id=cid)
-            display_name = channel.findtext("display-name") or cid
-            ET.SubElement(channel_ele, "display-name").text = display_name
-            icon = channel.find("icon")
-            if icon is not None and icon.get("src"):
-                ET.SubElement(channel_ele, "icon", src=icon.get("src"))
-
-        for programme in root.findall("programme"):
-            channel_attr = programme.get("channel")
-            if channel_attr and channel_attr not in enabled_epg_ids:
-                continue
-            stop_attr = programme.get("stop")
-            if stop_attr:
-                try:
-                    stop_time = datetime.strptime(stop_attr.split(" ")[0], "%Y%m%d%H%M%S")
-                    if stop_time < past_cutoff:
-                        continue
-                except ValueError:
-                    pass
-            programmes.append(ET.fromstring(ET.tostring(programme, encoding="unicode")))
-
-    xmltv = channels_xml
-    seen_programmes = set()
-
-    for programme in programmes.iter("programme"):
-        prog_key = (
-            programme.get("channel"),
-            programme.get("start"),
-            programme.get("stop"),
+        _store_portal_epg_to_db(
+            portal_id=portal_id,
+            portal_name=portal_name,
+            portal_url=url,
+            enabled_channels=enabled_by_portal[portal_id],
+            epg=epg,
+            portal_epg_offset=portal_epg_offset,
+            past_cutoff_ts=past_cutoff_ts,
+            future_cutoff_ts=future_cutoff_ts,
         )
-        if prog_key not in seen_programmes:
-            seen_programmes.add(prog_key)
-            xmltv.append(programme)
 
-    for cached in cached_programmes:
-        prog_elem = ET.fromstring(cached)
-        prog_key = (
-            prog_elem.get("channel"),
-            prog_elem.get("start"),
-            prog_elem.get("stop"),
-        )
-        if prog_key not in seen_programmes:
-            seen_programmes.add(prog_key)
-            xmltv.append(prog_elem)
-
-    logger.info(f"EPG: {len(seen_programmes)} unique programmes after deduplication")
-
-    rough_string = ET.tostring(xmltv, encoding="unicode")
-    reparsed = minidom.parseString(rough_string)
-    formatted_xmltv = "\n".join(
-        [
-            line
-            for line in reparsed.toprettyxml(indent="  ").splitlines()
-            if line.strip()
-        ]
+    xmltv_text, channel_ids = _build_xmltv_from_db(
+        enabled_rows,
+        portals=portals,
+        past_cutoff_ts=past_cutoff_ts,
+        future_cutoff_ts=future_cutoff_ts,
     )
 
-    with open(cache_file, "w", encoding="utf-8") as f:
-        f.write(formatted_xmltv)
-    logger.info("XMLTV cache updated.")
-
     global cached_xmltv, last_updated
-    cached_xmltv = formatted_xmltv
+    cached_xmltv = xmltv_text
     last_updated = time.time()
-    logger.debug(f"Generated XMLTV: {formatted_xmltv}")
-    epg_map = {}
-    for channel in channels_xml.findall("channel"):
-        cid = channel.get("id")
-        if not cid:
-            continue
-        epg_map[cid] = {"name": channel.findtext("display-name") or cid}
-    _set_epg_channel_ids(seen_channel_ids)
-    epg_map = _apply_epg_source_map(epg_map, source_map=source_map, default_source="portal")
-    _set_epg_channel_map(epg_map)
+    logger.debug("Generated XMLTV size: %s bytes", len(xmltv_text or ""))
+
+    epg_map, epg_ids = _rebuild_epg_channel_map_from_db()
+    _set_epg_channel_ids(epg_ids if epg_ids else set(channel_ids))
+    if epg_map:
+        _set_epg_channel_map(epg_map)
 
     save_epg_cache(cached_xmltv, last_updated, logger, EPG_CACHE_PATH)
 
     epg_refresh_status["is_refreshing"] = False
     epg_refresh_status["completed_at"] = datetime.utcnow().isoformat()
     logger.info("EPG refresh completed successfully.")
+
+
+def refresh_xmltv_for_portal(portal_id):
+    settings = getSettings()
+    portal = getPortals().get(portal_id)
+    if not portal:
+        logger.warning("EPG refresh skipped: portal %s not found", portal_id)
+        return False
+
+    epg_future_hours = int(settings.get("epg future hours", "24"))
+    epg_past_hours = int(settings.get("epg past hours", "2"))
+    past_cutoff = datetime.utcnow() - timedelta(hours=epg_past_hours)
+    future_cutoff = datetime.utcnow() + timedelta(hours=epg_future_hours)
+    past_cutoff_ts = int(past_cutoff.timestamp())
+    future_cutoff_ts = int(future_cutoff.timestamp())
+
+    enabled_rows = _fetch_enabled_channels_for_epg(portal_id=portal_id)
+    if not enabled_rows:
+        logger.info("EPG refresh skipped for portal %s (no channels in active groups).", portal_id)
+        return True
+
+    portal_name = portal.get("name", portal_id)
+    fetch_epg = portal.get("fetch epg", "true") == "true"
+    portal_epg_offset = int(portal.get("epg offset", 0))
+    url = portal.get("url", "")
+    macs = list(portal.get("macs", {}).keys())
+    proxy = portal.get("proxy", "")
+
+    logger.info(
+        "Refreshing EPG for portal: %s | fetch=%s | offset=%s | channels=%s",
+        portal_name,
+        fetch_epg,
+        portal_epg_offset,
+        len(enabled_rows),
+    )
+
+    epg = None
+    if fetch_epg:
+        for mac in macs:
+            try:
+                token = stb.getToken(url, mac, proxy)
+                if not token:
+                    logger.warning("EPG fetch: token missing for MAC %s (portal %s)", mac, portal_name)
+                    continue
+                stb.getProfile(url, mac, token, proxy)
+                stb.getAllChannels(url, mac, token, proxy)
+                epg = stb.getEpg(url, mac, token, epg_future_hours, proxy)
+                if epg:
+                    logger.info("Successfully fetched EPG from MAC %s (portal %s)", mac, portal_name)
+                    break
+                logger.warning("EPG fetch returned empty data for MAC %s (portal %s)", mac, portal_name)
+            except Exception as e:
+                logger.error("Error fetching EPG for MAC %s (portal %s): %s", mac, portal_name, e)
+                continue
+    else:
+        logger.info("Skipping EPG fetch for portal %s (disabled).", portal_name)
+
+    _store_portal_epg_to_db(
+        portal_id=portal_id,
+        portal_name=portal_name,
+        portal_url=url,
+        enabled_channels=enabled_rows,
+        epg=epg,
+        portal_epg_offset=portal_epg_offset,
+        past_cutoff_ts=past_cutoff_ts,
+        future_cutoff_ts=future_cutoff_ts,
+    )
+
+    refresh_xmltv_for_epg_ids(
+        {row["custom_epg_id"] or effective_epg_name(row["custom_name"], row["auto_name"], row["name"]) for row in enabled_rows if (row.get("custom_epg_id") or effective_epg_name(row.get("custom_name"), row.get("auto_name"), row.get("name")))}
+    )
+    return True
 
 
 def moveMac(portalId, mac):
@@ -2866,6 +3464,8 @@ job_manager = JobManager(
     refresh_channels_cache=refresh_channels_cache,
     run_portal_matching=run_portal_matching,
     refresh_xmltv=refresh_xmltv,
+    refresh_xmltv_for_portal=refresh_xmltv_for_portal,
+    refresh_epg_for_ids=refresh_xmltv_for_epg_ids,
     getSettings=getSettings,
     getPortals=getPortals,
     get_db_connection=get_db_connection,
@@ -2875,12 +3475,14 @@ job_manager = JobManager(
     channels_refresh_status=channels_refresh_status,
     channels_refresh_status_lock=channels_refresh_status_lock,
     set_cached_xmltv=_set_cached_xmltv,
+    effective_epg_name=effective_epg_name,
 )
 
 app.register_blueprint(create_settings_blueprint(job_manager.enqueue_epg_refresh))
 app.register_blueprint(
     create_epg_blueprint(
         refresh_xmltv=refresh_xmltv,
+        refresh_epg_for_ids=refresh_xmltv_for_epg_ids,
         enqueue_epg_refresh=job_manager.enqueue_epg_refresh,
         get_cached_xmltv=lambda: cached_xmltv,
         get_last_updated=lambda: last_updated,
@@ -2889,6 +3491,8 @@ app.register_blueprint(
         getPortals=getPortals,
         get_db_connection=get_db_connection,
         effective_epg_name=effective_epg_name,
+        getSettings=getSettings,
+        open_epg_source_db=_open_epg_source_db,
     )
 )
 app.register_blueprint(
@@ -2920,12 +3524,12 @@ app.register_blueprint(
         getSettings=getSettings,
         suggest_channelsdvr_matches=suggest_channelsdvr_matches,
         host=host,
-        enqueue_epg_refresh=job_manager.enqueue_epg_refresh,
         refresh_epg_for_ids=refresh_xmltv_for_epg_ids,
         refresh_lineup=refresh_lineup,
         enqueue_refresh_all=job_manager.enqueue_refresh_all,
         set_last_playlist_host=_set_last_playlist_host,
         filter_cache=filter_cache,
+        effective_epg_name=effective_epg_name,
     )
 )
 app.register_blueprint(

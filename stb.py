@@ -1,3 +1,4 @@
+import logging
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from urllib.parse import urlparse
@@ -20,6 +21,7 @@ _tz = get_container_timezone()
 logger.info(f"Using timezone for portal requests: {_tz}")
 
 s = requests.Session()
+logger = logging.getLogger("MacReplay")
 retries = Retry(total=3, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
 s.mount("http://", HTTPAdapter(max_retries=retries))
 
@@ -266,8 +268,19 @@ def getEpg(url, mac, token, period, proxy=None):
             proxies=proxies,
             timeout=30,
         )
-        data = response.json()["js"]["data"]
+        if not response.ok:
+            logger.warning("EPG fetch failed for MAC %s (status %s)", mac, response.status_code)
+            logger.debug("EPG response body (first 300 chars): %s", response.text[:300])
+            return None
+        try:
+            payload = response.json()
+        except Exception as e:
+            logger.warning("EPG fetch JSON parse failed for MAC %s: %s", mac, e)
+            return None
+        data = (payload.get("js") or {}).get("data")
         if data:
             return data
-    except:
-        pass
+        logger.warning("EPG fetch returned empty data for MAC %s", mac)
+    except Exception as e:
+        logger.warning("EPG fetch request failed for MAC %s: %s", mac, e)
+    return None

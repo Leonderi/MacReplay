@@ -70,6 +70,66 @@ def create_portal_blueprint(
             settings=getSettings(),
         )
 
+    @bp.route("/api/portal/groups", methods=["POST"])
+    @authorise
+    def portal_groups_from_db():
+        data = request.get_json(silent=True) or {}
+        portal_id = data.get("portal_id")
+        if not portal_id:
+            return jsonify({"success": False, "message": "Portal ID required"}), 400
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT genre_id AS id,
+                       name AS title,
+                       channel_count,
+                       active
+                FROM groups
+                WHERE portal_id = ?
+                ORDER BY name COLLATE NOCASE
+                """,
+                (portal_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            groups = []
+            for row in rows:
+                title = row["title"] or row["id"]
+                groups.append(
+                    {
+                        "id": row["id"],
+                        "title": title,
+                        "channel_count": row["channel_count"] or 0,
+                        "active": bool(row["active"]),
+                    }
+                )
+            return jsonify({"success": True, "groups": groups})
+        except Exception as e:
+            logger.error(f"Error loading groups from DB: {e}")
+            return jsonify({"success": False, "message": str(e)}), 500
+
+    @bp.route("/api/portal/genres/list", methods=["POST"])
+    @authorise
+    def portal_genres_from_api():
+        data = request.get_json(silent=True) or {}
+        url = data.get("url")
+        mac = data.get("mac")
+        proxy = data.get("proxy") or ""
+
+        if not url or not mac:
+            return jsonify({"success": False, "message": "Portal URL and MAC required"}), 400
+
+        token = stb.getToken(url, mac, proxy)
+        if not token:
+            return jsonify({"success": False, "message": "Could not get token"}), 400
+
+        genres = stb.getGenres(url, mac, token, proxy) or []
+        return jsonify({"success": True, "genres": genres})
+
     @bp.route("/api/portal/genres", methods=["POST"])
     @authorise
     def update_portal_genres():
@@ -471,6 +531,7 @@ def create_portal_blueprint(
             cursor = conn.cursor()
             cursor.execute("DELETE FROM channels WHERE portal_id = ?", (portal_id,))
             deleted_count = cursor.rowcount
+            cursor.execute("DELETE FROM channel_tags WHERE portal_id = ?", (portal_id,))
             cursor.execute("DELETE FROM group_stats WHERE portal_id = ?", (portal_id,))
             cursor.execute("DELETE FROM portal_stats WHERE portal_id = ?", (portal_id,))
             conn.commit()

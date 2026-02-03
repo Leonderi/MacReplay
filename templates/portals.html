@@ -1182,8 +1182,14 @@ async function openGenreModal(portalId) {
     // Fallback: Fetch genres from portal API (for new portals without channels yet)
     try {
         const firstMac = Object.keys(portal.macs)[0];
+        if (!firstMac) {
+            document.getElementById('genreModalLoading').style.display = 'none';
+            document.getElementById('genreModalErrorMessage').textContent = 'Keine MACs für dieses Portal vorhanden.';
+            document.getElementById('genreModalError').style.display = 'block';
+            return;
+        }
         currentGenreModalMac = firstMac;
-        const response = await fetch('/api/portal/genres', {
+        const response = await fetch('/api/portal/genres/list', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

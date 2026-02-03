@@ -19,12 +19,12 @@ def create_editor_blueprint(
     getSettings,
     suggest_channelsdvr_matches,
     host,
-    enqueue_epg_refresh,
     refresh_epg_for_ids,
     refresh_lineup,
     enqueue_refresh_all,
     set_last_playlist_host,
     filter_cache,
+    effective_epg_name,
 ):
     bp = Blueprint("editor", __name__)
 
@@ -72,7 +72,8 @@ def create_editor_blueprint(
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            epg_channels = get_epg_channel_ids()
+            epg_channel_map = get_epg_channel_map()
+            epg_channels = set(epg_channel_map.keys())
 
             base_query = f"""FROM channels c
                 LEFT JOIN groups g ON c.portal_id = g.portal_id AND c.genre_id = g.genre_id
@@ -157,29 +158,41 @@ def create_editor_blueprint(
             if event_tags_filter:
                 values = [v.strip() for v in event_tags_filter.split(",") if v.strip()]
                 if values:
-                    like_clauses = []
+                    exists_clauses = []
                     for value in values:
-                        like_clauses.append("(',' || c.event_tags || ',') LIKE ?")
-                        params.append(f"%,{value},%")
-                    base_query += " AND (" + " OR ".join(like_clauses) + ")"
+                        exists_clauses.append(
+                            "EXISTS (SELECT 1 FROM channel_tags ct "
+                            "WHERE ct.portal_id = c.portal_id AND ct.channel_id = c.channel_id "
+                            "AND ct.tag_type = 'event' AND ct.tag_value = ?)"
+                        )
+                        params.append(value)
+                    base_query += " AND (" + " OR ".join(exists_clauses) + ")"
 
             if misc_include:
                 values = [v.strip() for v in misc_include.split(",") if v.strip()]
                 if values:
-                    like_clauses = []
+                    exists_clauses = []
                     for value in values:
-                        like_clauses.append("(',' || c.misc_tags || ',') LIKE ?")
-                        params.append(f"%,{value},%")
-                    base_query += " AND (" + " OR ".join(like_clauses) + ")"
+                        exists_clauses.append(
+                            "EXISTS (SELECT 1 FROM channel_tags ct "
+                            "WHERE ct.portal_id = c.portal_id AND ct.channel_id = c.channel_id "
+                            "AND ct.tag_type = 'misc' AND ct.tag_value = ?)"
+                        )
+                        params.append(value)
+                    base_query += " AND (" + " OR ".join(exists_clauses) + ")"
 
             if misc_exclude:
                 values = [v.strip() for v in misc_exclude.split(",") if v.strip()]
                 if values:
-                    not_like = []
+                    not_exists = []
                     for value in values:
-                        not_like.append("(',' || c.misc_tags || ',') NOT LIKE ?")
-                        params.append(f"%,{value},%")
-                    base_query += " AND (" + " AND ".join(not_like) + ")"
+                        not_exists.append(
+                            "NOT EXISTS (SELECT 1 FROM channel_tags ct "
+                            "WHERE ct.portal_id = c.portal_id AND ct.channel_id = c.channel_id "
+                            "AND ct.tag_type = 'misc' AND ct.tag_value = ?)"
+                        )
+                        params.append(value)
+                    base_query += " AND (" + " AND ".join(not_exists) + ")"
 
             if raw_filter in ("true", "include"):
                 base_query += " AND c.is_raw = 1"
@@ -396,7 +409,9 @@ def create_editor_blueprint(
                 channel_id = row["channel_id"]
                 display_name = row["display_name"] or ""
                 duplicate_count = duplicate_counts.get(display_name, 0)
-                epg_id = row["custom_epg_id"] or (row["custom_name"] or row["auto_name"] or row["name"])
+                epg_id = row["custom_epg_id"] if row["custom_epg_id"] else effective_epg_name(
+                    row["custom_name"], row["auto_name"], row["name"]
+                )
                 has_epg = epg_id in epg_channels
 
                 channels.append(
@@ -557,7 +572,7 @@ def create_editor_blueprint(
             epg_ids = [epg_ids]
 
         logger.info("Editor EPG refresh requested for %d IDs", len(epg_ids))
-        ok, message = refresh_epg_for_ids(epg_ids)
+        ok, message = refresh_epg_for_ids(epg_ids, cache_only=True)
         if not ok:
             logger.warning("Editor EPG refresh failed: %s", message)
             return jsonify({"ok": False, "error": message}), 400
@@ -749,24 +764,14 @@ def create_editor_blueprint(
             )
 
             cursor.execute(
-                "SELECT DISTINCT event_tags FROM channels WHERE event_tags IS NOT NULL AND event_tags != ''"
+                "SELECT DISTINCT tag_value FROM channel_tags WHERE tag_type = 'event' ORDER BY tag_value"
             )
-            event_values = set()
-            for row in cursor.fetchall():
-                for tag in (row["event_tags"] or "").split(","):
-                    tag = tag.strip()
-                    if tag:
-                        event_values.add(tag)
+            event_values = {row["tag_value"] for row in cursor.fetchall() if row["tag_value"]}
 
             cursor.execute(
-                "SELECT DISTINCT misc_tags FROM channels WHERE misc_tags IS NOT NULL AND misc_tags != ''"
+                "SELECT DISTINCT tag_value FROM channel_tags WHERE tag_type = 'misc' ORDER BY tag_value"
             )
-            misc_values = set()
-            for row in cursor.fetchall():
-                for tag in (row["misc_tags"] or "").split(","):
-                    tag = tag.strip()
-                    if tag:
-                        misc_values.add(tag)
+            misc_values = {row["tag_value"] for row in cursor.fetchall() if row["tag_value"]}
 
             conn.close()
 
@@ -873,7 +878,6 @@ def create_editor_blueprint(
     @bp.route("/editor/save", methods=["POST"])
     @authorise
     def editorSave():
-        enqueue_epg_refresh(reason="editor_save")
         set_last_playlist_host(None)
         threading.Thread(target=refresh_lineup).start()
 
@@ -947,7 +951,7 @@ def create_editor_blueprint(
             for edit in epgEdits:
                 portal = edit["portal"]
                 channel_id = edit["channel id"]
-                custom_epg_id = edit["custom epg id"]
+                custom_epg_id = (edit["custom epg id"] or "").strip()
 
                 cursor.execute(
                     """
@@ -1021,7 +1025,41 @@ def create_editor_blueprint(
         finally:
             conn.close()
 
-        return jsonify({"success": True, "message": "Playlist config saved!"})
+        refresh_epg_ids = []
+        if epgEdits:
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                for edit in epgEdits:
+                    portal = edit["portal"]
+                    channel_id = edit["channel id"]
+                    cursor.execute(
+                        """
+                        SELECT custom_epg_id, custom_name, auto_name, name
+                        FROM channels
+                        WHERE portal_id = ? AND channel_id = ?
+                        """,
+                        (portal, channel_id),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        continue
+                    epg_id = row["custom_epg_id"] if row["custom_epg_id"] else effective_epg_name(
+                        row["custom_name"], row["auto_name"], row["name"]
+                    )
+                    if epg_id:
+                        refresh_epg_ids.append(epg_id)
+                conn.close()
+            except Exception as e:
+                logger.warning(f"Failed to build EPG refresh list: {e}")
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Playlist config saved!",
+                "epg_ids": sorted(set(refresh_epg_ids)),
+            }
+        )
 
     @bp.route("/api/editor/merge", methods=["POST"])
     @authorise
@@ -1103,6 +1141,10 @@ def create_editor_blueprint(
 
             cursor.execute(
                 "DELETE FROM channels WHERE portal_id = ? AND channel_id = ?",
+                [secondary_portal, secondary_channel_id],
+            )
+            cursor.execute(
+                "DELETE FROM channel_tags WHERE portal_id = ? AND channel_id = ?",
                 [secondary_portal, secondary_channel_id],
             )
 

@@ -1,8 +1,7 @@
 import os
 from datetime import datetime, timezone, timedelta
-import xml.etree.ElementTree as ET
 
-from flask import Blueprint, Response, jsonify, render_template
+from flask import Blueprint, Response, jsonify, render_template, request
 
 from ..security import authorise
 
@@ -10,6 +9,7 @@ from ..security import authorise
 def create_epg_blueprint(
     *,
     refresh_xmltv,
+    refresh_epg_for_ids,
     enqueue_epg_refresh,
     get_cached_xmltv,
     get_last_updated,
@@ -18,6 +18,8 @@ def create_epg_blueprint(
     getPortals,
     get_db_connection,
     effective_epg_name,
+    getSettings,
+    open_epg_source_db,
 ):
     bp = Blueprint("epg", __name__)
 
@@ -47,107 +49,157 @@ def create_epg_blueprint(
     @bp.route("/api/epg")
     @authorise
     def api_epg():
-        cached_xmltv = get_cached_xmltv()
-
-        if cached_xmltv is None:
-            return jsonify({"channels": [], "programmes": []})
-
         try:
-            root = ET.fromstring(cached_xmltv)
+            settings = getSettings()
+            epg_past_hours = int(settings.get("epg past hours", "2"))
+            epg_future_hours = int(settings.get("epg future hours", "24"))
+            now = datetime.now(timezone.utc)
+            past_cutoff_ts = int((now - timedelta(hours=epg_past_hours)).timestamp())
+            future_cutoff_ts = int((now + timedelta(hours=epg_future_hours)).timestamp())
 
             portals = getPortals()
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT portal_id as portal, name, custom_name, auto_name, custom_epg_id
+                SELECT
+                    portal_id as portal,
+                    name,
+                    logo,
+                    custom_name,
+                    auto_name,
+                    matched_name,
+                    custom_epg_id
                 FROM channels WHERE enabled = 1
                 """
             )
-            channel_portal_map = {}
-            enabled_epg_ids = set()
-            for row in cursor.fetchall():
-                epg_id = row["custom_epg_id"] if row["custom_epg_id"] else effective_epg_name(
-                    row["custom_name"], row["auto_name"], row["name"]
-                )
-                portal_id = row["portal"]
-                portal_name = portals.get(portal_id, {}).get("name", portal_id)
-                channel_portal_map[epg_id] = portal_name
-                enabled_epg_ids.add(epg_id)
+            rows = cursor.fetchall()
+            epg_ids = set()
+            for row in rows:
+                if row["custom_epg_id"]:
+                    epg_ids.add(row["custom_epg_id"])
+                default_id = effective_epg_name(row["custom_name"], row["auto_name"], row["name"])
+                if default_id:
+                    epg_ids.add(default_id)
+
+            epg_meta = {}
+            if epg_ids:
+                ids = list(epg_ids)
+                chunk_size = 900
+                for i in range(0, len(ids), chunk_size):
+                    chunk = ids[i:i + chunk_size]
+                    placeholders = ",".join(["?"] * len(chunk))
+                    cursor.execute(
+                        f"""
+                        SELECT source_id, channel_id, display_name, icon
+                        FROM epg_channels
+                        WHERE channel_id IN ({placeholders})
+                        """,
+                        chunk,
+                    )
+                    for row in cursor.fetchall():
+                        epg_meta[row["channel_id"]] = {
+                            "source_id": row["source_id"],
+                            "display_name": row["display_name"],
+                            "icon": row["icon"],
+                        }
             conn.close()
 
+            channel_portal_map = {}
+            channel_sources = {}
             channels = []
-            for channel in root.findall("channel"):
-                channel_id = channel.get("id")
-                if channel_id not in enabled_epg_ids:
+            seen_channel_ids = set()
+
+            def resolve_display_name(row):
+                return (
+                    row["custom_name"]
+                    or row["matched_name"]
+                    or row["auto_name"]
+                    or row["name"]
+                )
+
+            for row in rows:
+                portal_id = row["portal"]
+                portal_name = portals.get(portal_id, {}).get("name", portal_id)
+                default_id = effective_epg_name(row["custom_name"], row["auto_name"], row["name"])
+                custom_id = row["custom_epg_id"] or ""
+
+                if custom_id:
+                    if custom_id in epg_meta:
+                        epg_id = custom_id
+                        source_id = epg_meta[custom_id]["source_id"]
+                    else:
+                        epg_id = custom_id
+                        source_id = None
+                else:
+                    epg_id = default_id
+                    source_id = epg_meta.get(epg_id, {}).get("source_id") if epg_id else None
+                    if not source_id:
+                        source_id = portal_id
+
+                if not epg_id or epg_id in seen_channel_ids:
                     continue
-                display_name = channel.find("display-name")
-                icon = channel.find("icon")
+                seen_channel_ids.add(epg_id)
+
+                display_name = epg_meta.get(epg_id, {}).get("display_name") or resolve_display_name(row)
+                icon = epg_meta.get(epg_id, {}).get("icon") or row["logo"]
+
+                channel_portal_map[epg_id] = portal_name
+                if source_id:
+                    channel_sources.setdefault(source_id, set()).add(epg_id)
                 channels.append(
                     {
-                        "id": channel_id,
-                        "name": display_name.text if display_name is not None else channel_id,
-                        "logo": icon.get("src") if icon is not None else None,
-                        "portal": channel_portal_map.get(channel_id, ""),
+                        "id": epg_id,
+                        "name": display_name or epg_id,
+                        "logo": icon,
+                        "portal": portal_name,
                     }
                 )
 
             programmes = []
-            now = datetime.now(timezone.utc)
 
-            def parse_xmltv_time(time_str):
-                if not time_str:
-                    return None
-                try:
-                    parts = time_str.split(" ")
-                    dt_str = parts[0]
-                    dt = datetime.strptime(dt_str, "%Y%m%d%H%M%S")
-                    if len(parts) > 1:
-                        tz_str = parts[1]
-                        tz_sign = 1 if tz_str[0] == "+" else -1
-                        tz_hours = int(tz_str[1:3])
-                        tz_mins = int(tz_str[3:5]) if len(tz_str) >= 5 else 0
-                        tz_offset = timedelta(
-                            hours=tz_sign * tz_hours, minutes=tz_sign * tz_mins
+            for source_id, ids in channel_sources.items():
+                conn = open_epg_source_db(source_id)
+                if conn is None:
+                    continue
+                cursor = conn.cursor()
+                id_list = list(ids)
+                chunk_size = 900
+                for i in range(0, len(id_list), chunk_size):
+                    chunk = id_list[i:i + chunk_size]
+                    placeholders = ",".join(["?"] * len(chunk))
+                    cursor.execute(
+                        f"""
+                        SELECT channel_id, start, stop, start_ts, stop_ts, title, description
+                        FROM epg_programmes
+                        WHERE channel_id IN ({placeholders})
+                          AND stop_ts >= ?
+                          AND start_ts <= ?
+                        ORDER BY start_ts ASC
+                        """,
+                        [*chunk, past_cutoff_ts, future_cutoff_ts],
+                    )
+                    for row in cursor.fetchall():
+                        start_ts = row["start_ts"]
+                        stop_ts = row["stop_ts"]
+                        if start_ts is None or stop_ts is None:
+                            continue
+                        start_dt = datetime.fromtimestamp(start_ts, tz=timezone.utc)
+                        stop_dt = datetime.fromtimestamp(stop_ts, tz=timezone.utc)
+                        programmes.append(
+                            {
+                                "channel": row["channel_id"],
+                                "start": start_dt.isoformat(),
+                                "stop": stop_dt.isoformat(),
+                                "start_timestamp": start_ts,
+                                "stop_timestamp": stop_ts,
+                                "title": row["title"] or "Unknown",
+                                "description": row["description"] or "",
+                                "is_current": start_dt <= now <= stop_dt,
+                                "is_past": stop_dt < now,
+                            }
                         )
-                        dt = dt.replace(tzinfo=timezone(tz_offset))
-                        dt = dt.astimezone(timezone.utc)
-                    else:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt
-                except (ValueError, AttributeError, IndexError) as e:
-                    logger.debug(f"Error parsing XMLTV time '{time_str}': {e}")
-                    return None
-
-            for programme in root.findall("programme"):
-                channel_id = programme.get("channel")
-                if channel_id not in enabled_epg_ids:
-                    continue
-                start_str = programme.get("start")
-                stop_str = programme.get("stop")
-
-                start_time = parse_xmltv_time(start_str)
-                stop_time = parse_xmltv_time(stop_str)
-
-                if not start_time or not stop_time:
-                    continue
-
-                title_elem = programme.find("title")
-                desc_elem = programme.find("desc")
-
-                programmes.append(
-                    {
-                        "channel": channel_id,
-                        "start": start_time.isoformat(),
-                        "stop": stop_time.isoformat(),
-                        "start_timestamp": start_time.timestamp(),
-                        "stop_timestamp": stop_time.timestamp(),
-                        "title": title_elem.text if title_elem is not None else "Unknown",
-                        "description": desc_elem.text if desc_elem is not None else "",
-                        "is_current": start_time <= now <= stop_time,
-                        "is_past": stop_time < now,
-                    }
-                )
+                conn.close()
 
             programmes.sort(key=lambda x: x["start_timestamp"])
 
@@ -208,6 +260,22 @@ def create_epg_blueprint(
                         "started_at": epg_refresh_status["started_at"],
                     }
                 )
+
+            payload = None
+            try:
+                payload = request.get_json(silent=True) or {}
+            except Exception:
+                payload = {}
+
+            epg_ids = payload.get("epg_ids") or payload.get("epgIds") or []
+            if isinstance(epg_ids, str):
+                epg_ids = [epg_ids]
+            epg_ids = [value for value in epg_ids if str(value).strip()]
+
+            if epg_ids:
+                ok, message = refresh_epg_for_ids(epg_ids, cache_only=True)
+                status = "success" if ok else "error"
+                return jsonify({"status": status, "message": message})
 
             enqueue_epg_refresh(reason="manual_api")
             logger.info("Manual EPG refresh triggered via API")

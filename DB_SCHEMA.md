@@ -1,6 +1,7 @@
 # Database Schema (SQLite)
 
 Source: live schema from `/host_opt/stb-proxy/data/channels.db` and `init_db()` in `app.py`.
+Per-source EPG programmes are stored in separate SQLite files under `/host_opt/stb-proxy/data/epg_sources/*.sqlite`.
 
 ## Table: `channels`
 
@@ -79,6 +80,19 @@ Index:
 | `active_groups` | INTEGER | Active groups for portal |
 | `updated_at` | TEXT | ISO timestamp of last update |
 
+## Table: `channel_tags`
+
+| Field | Type | Purpose |
+|---|---|---|
+| `portal_id` | TEXT | Portal ID (part of primary key) |
+| `channel_id` | TEXT | Channel ID (part of primary key) |
+| `tag_type` | TEXT | Tag category (e.g. event, misc) |
+| `tag_value` | TEXT | Tag value |
+
+Indexes:
+- `idx_channel_tags_type_value` on `channel_tags(tag_type, tag_value)`
+- `idx_channel_tags_channel` on `channel_tags(portal_id, channel_id)`
+
 ## Table: `group_stats`
 
 | Field | Type | Purpose |
@@ -91,3 +105,61 @@ Index:
 
 Index:
 - `idx_group_stats_portal_id` on `group_stats(portal_id)`
+
+## Table: `epg_sources`
+
+| Field | Type | Purpose |
+|---|---|---|
+| `source_id` | TEXT | Source ID (portal ID or custom source ID) |
+| `name` | TEXT | Display name of the source |
+| `url` | TEXT | Source URL (for custom sources) |
+| `source_type` | TEXT | `portal` or `custom` |
+| `enabled` | INTEGER | 1/0 whether source is enabled |
+| `interval_hours` | REAL | Refresh interval |
+| `last_fetch` | REAL | Last fetch timestamp (epoch) |
+| `last_refresh` | REAL | Last refresh timestamp (epoch) |
+
+## Table: `epg_channels`
+
+| Field | Type | Purpose |
+|---|---|---|
+| `source_id` | TEXT | Source ID (part of primary key) |
+| `channel_id` | TEXT | EPG channel ID (part of primary key) |
+| `display_name` | TEXT | Display name from source |
+| `icon` | TEXT | Icon/logo URL |
+| `lcn` | TEXT | LCN/number if provided |
+| `updated_at` | REAL | Timestamp of last update |
+
+Indexes:
+- `idx_epg_channels_channel` on `epg_channels(channel_id)`
+- `idx_epg_channels_source` on `epg_channels(source_id)`
+
+## Table: `epg_channel_names`
+
+| Field | Type | Purpose |
+|---|---|---|
+| `source_id` | TEXT | Source ID (part of primary key) |
+| `channel_id` | TEXT | EPG channel ID (part of primary key) |
+| `name` | TEXT | Alternate display name |
+
+Index:
+- `idx_epg_channel_names_name` on `epg_channel_names(name)`
+
+## Per-source DB: `epg_programmes`
+
+Location: `/host_opt/stb-proxy/data/epg_sources/<source_id>.sqlite`
+
+| Field | Type | Purpose |
+|---|---|---|
+| `channel_id` | TEXT | EPG channel ID |
+| `start` | TEXT | XMLTV start timestamp string |
+| `stop` | TEXT | XMLTV stop timestamp string |
+| `start_ts` | INTEGER | Start timestamp (epoch) |
+| `stop_ts` | INTEGER | Stop timestamp (epoch) |
+| `title` | TEXT | Programme title |
+| `description` | TEXT | Programme description |
+
+Indexes:
+- `idx_epg_programmes_channel` on `epg_programmes(channel_id)`
+- `idx_epg_programmes_start` on `epg_programmes(start_ts)`
+- `idx_epg_programmes_stop` on `epg_programmes(stop_ts)`

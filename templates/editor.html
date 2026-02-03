@@ -640,6 +640,7 @@
                     showNotification(data.message || 'Playlist config saved!', 'success');
                 }
                 const pendingEpgEdits = epgEdits.slice();
+                const responseEpgIds = Array.isArray(data.epg_ids) ? data.epg_ids : [];
                 // Clear edit arrays
                 enabledEdits = [];
                 numberEdits = [];
@@ -647,7 +648,9 @@
                 groupEdits = [];
                 epgEdits = [];
                 if (pendingEpgEdits.length) {
-                    const epgIds = [...new Set(pendingEpgEdits.map(e => (e["custom epg id"] || "").trim()).filter(Boolean))];
+                    const epgIds = responseEpgIds.length
+                        ? responseEpgIds
+                        : [...new Set(pendingEpgEdits.map(e => (e["custom epg id"] || "").trim()).filter(Boolean))];
                     if (epgIds.length) {
                         refreshEpgForIds(epgIds, {
                             successMessage: 'EPG wurde aktualisiert.',
@@ -971,10 +974,10 @@
 
     function applyStoredSelects() {
         const stored = loadStoredFilters();
-        if (stored.portal && portalSelect) portalSelect.setValue(stored.portal);
-        if (stored.group && groupSelect) groupSelect.setValue(stored.group);
-        if (stored.country && countrySelect) countrySelect.setValue(stored.country);
-        if (stored.eventTags && eventTagSelect) eventTagSelect.setValue(stored.eventTags);
+        if (stored.portal && portalSelect) portalSelect.setValue(stored.portal, true);
+        if (stored.group && groupSelect) groupSelect.setValue(stored.group, true);
+        if (stored.country && countrySelect) countrySelect.setValue(stored.country, true);
+        if (stored.eventTags && eventTagSelect) eventTagSelect.setValue(stored.eventTags, true);
         if (stored.toggles) {
             document.querySelectorAll('.tri-toggle').forEach(button => {
                 const key = button.dataset.key;
