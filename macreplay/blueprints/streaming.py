@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, Response, make_response, redirect, request, send_file
 
 import stb
-import xtream
+from macreplay import xtream
 
 
 def create_streaming_blueprint(

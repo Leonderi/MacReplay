@@ -129,7 +129,7 @@ except (subprocess.CalledProcessError, FileNotFoundError):
 
 
 import stb
-import xtream
+from macreplay import xtream
 from macreplay.app_factory import create_app
 import waitress
 import sqlite3

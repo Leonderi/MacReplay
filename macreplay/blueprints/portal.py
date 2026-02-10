@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, flash
 
 from ..security import authorise
 import stb
-import xtream
+from macreplay import xtream
 
 
 def create_portal_blueprint(
