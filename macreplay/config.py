@@ -171,11 +171,14 @@ defaultSettings = {
 }
 
 defaultPortal = {
+    "type": "stalker",
     "enabled": True,
     "name": "",
     "portal code": "",
     "url": "",
     "macs": {},
+    "xtream username": "",
+    "xtream password": "",
     "streams per mac": 1,
     "epg offset": 0,
     "proxy": "",

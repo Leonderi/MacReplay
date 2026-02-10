@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, flash
 
 from ..security import authorise
 import stb
+import xtream
 
 
 def create_portal_blueprint(
@@ -129,6 +130,32 @@ def create_portal_blueprint(
             return jsonify({"success": False, "message": "Could not get token"}), 400
 
         genres = stb.getGenres(url, mac, token, proxy) or []
+        return jsonify({"success": True, "genres": genres})
+
+    @bp.route("/api/portal/xtream/categories/list", methods=["POST"])
+    @authorise
+    def portal_xtream_categories_from_api():
+        data = request.get_json(silent=True) or {}
+        url = data.get("url")
+        username = data.get("username")
+        password = data.get("password")
+        proxy = data.get("proxy") or ""
+
+        if not url or not username or not password:
+            return jsonify({"success": False, "message": "URL, username and password required"}), 400
+
+        categories = xtream.get_live_categories(url, username, password, proxy) or []
+        genres = []
+        for item in categories:
+            if not isinstance(item, dict):
+                continue
+            genres.append(
+                {
+                    "id": str(item.get("category_id") or ""),
+                    "title": item.get("category_name") or item.get("name") or "Unknown",
+                    "channel_count": 0,
+                }
+            )
         return jsonify({"success": True, "genres": genres})
 
     @bp.route("/api/portal/genres", methods=["POST"])
@@ -409,6 +436,7 @@ def create_portal_blueprint(
 
         if len(macsd) > 0:
             portal = {
+                "type": "stalker",
                 "enabled": enabled,
                 "name": name,
                 "portal code": portalCode,
@@ -442,6 +470,63 @@ def create_portal_blueprint(
                 "None of the MACs tested OK for Portal(%s). Adding not successful",
                 name,
             )
+
+        return redirect("/portals", code=302)
+
+    @bp.route("/portal/add_xtream", methods=["POST"])
+    @authorise
+    def portalsAddXtream():
+        set_cached_xmltv(None)
+        portal_id = uuid.uuid4().hex
+        enabled = "true"
+        name = request.form["name"]
+        portalCode = request.form.get("portal code", "").strip().upper()
+        portalCode = re.sub(r"[^A-Z0-9]", "", portalCode)
+        if portalCode:
+            portalCode = portalCode[:2]
+        url = request.form["url"].strip().rstrip("/")
+        username = request.form.get("xtream_username", "").strip()
+        password = request.form.get("xtream_password", "").strip()
+        proxy = request.form.get("proxy", "").strip()
+        fetchEpg = "true" if request.form.get("fetch epg") else "false"
+        autoNormalize = "true" if request.form.get("auto normalize names") else "false"
+        autoMatch = "true" if request.form.get("auto match") else "false"
+
+        if not url or not username or not password:
+            flash("Xtream URL, username and password are required.", "danger")
+            return redirect("/portals", code=302)
+
+        portal = {
+            "type": "xtream",
+            "enabled": enabled,
+            "name": name,
+            "portal code": portalCode,
+            "url": url,
+            "macs": {},
+            "xtream username": username,
+            "xtream password": password,
+            "streams per mac": 1,
+            "epg offset": 0,
+            "proxy": proxy,
+            "fetch epg": fetchEpg,
+            "selected_genres": [],
+            "auto normalize names": autoNormalize,
+            "auto match": autoMatch,
+        }
+
+        for setting, default in defaultPortal.items():
+            if not portal.get(setting):
+                portal[setting] = default
+
+        portals = getPortals()
+        portals[portal_id] = portal
+        savePortals(portals)
+        filter_cache.clear()
+        logger.info("Xtream Portal(%s) added!", portal["name"])
+        flash(f"Xtream Portal({portal['name']}) added!", "success")
+
+        job_manager.enqueue_refresh_all(reason="portal_add")
+        flash("Channels are being loaded in the background.", "info")
 
         return redirect("/portals", code=302)
 
@@ -546,6 +631,7 @@ def create_portal_blueprint(
         if len(macsout) > 0:
             portals[portal_id]["enabled"] = enabled
             portals[portal_id]["name"] = name
+            portals[portal_id]["type"] = "stalker"
             portals[portal_id]["portal code"] = portalCode
             portals[portal_id]["url"] = url
             portals[portal_id]["macs"] = macsout
@@ -566,6 +652,48 @@ def create_portal_blueprint(
                 "None of the MACs tested OK for Portal(%s). Adding not successful",
                 name,
             )
+
+        return redirect("/portals", code=302)
+
+    @bp.route("/portal/update_xtream", methods=["POST"])
+    @authorise
+    def portalUpdateXtream():
+        set_cached_xmltv(None)
+        portal_id = request.form["id"]
+        enabled = request.form.get("enabled", "false")
+        name = request.form["name"]
+        portalCode = request.form.get("portal code", "").strip().upper()
+        portalCode = re.sub(r"[^A-Z0-9]", "", portalCode)
+        if portalCode:
+            portalCode = portalCode[:2]
+        url = request.form["url"].strip().rstrip("/")
+        username = request.form.get("xtream_username", "").strip()
+        password = request.form.get("xtream_password", "").strip()
+        proxy = request.form.get("proxy", "").strip()
+        fetchEpg = "true" if request.form.get("fetch epg") else "false"
+        autoNormalize = "true" if request.form.get("auto normalize names") else "false"
+        autoMatch = "true" if request.form.get("auto match") else "false"
+
+        portals = getPortals()
+        if portal_id not in portals:
+            flash("Portal not found.", "danger")
+            return redirect("/portals", code=302)
+
+        portals[portal_id]["enabled"] = enabled
+        portals[portal_id]["name"] = name
+        portals[portal_id]["type"] = "xtream"
+        portals[portal_id]["portal code"] = portalCode
+        portals[portal_id]["url"] = url
+        portals[portal_id]["xtream username"] = username
+        portals[portal_id]["xtream password"] = password
+        portals[portal_id]["proxy"] = proxy
+        portals[portal_id]["fetch epg"] = fetchEpg
+        portals[portal_id]["auto normalize names"] = autoNormalize
+        portals[portal_id]["auto match"] = autoMatch
+        savePortals(portals)
+        filter_cache.clear()
+        logger.info("Xtream Portal(%s) updated!", name)
+        flash(f"Xtream Portal({name}) updated!", "success")
 
         return redirect("/portals", code=302)
 
@@ -676,6 +804,8 @@ def create_portal_blueprint(
                 return jsonify({"success": False, "message": "Portal not found"}), 404
 
             portal = portals[portal_id]
+            if portal.get("type", "stalker") != "stalker":
+                return jsonify({"success": False, "message": "MAC refresh not supported for Xtream portals"}), 400
             url = portal.get("url", "")
             proxy = portal.get("proxy", "")
             macs = portal.get("macs", {}) or {}

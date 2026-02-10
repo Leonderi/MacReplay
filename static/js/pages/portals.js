@@ -5,6 +5,35 @@
 const portalsData = (pageData.portals || []);
 portalsData.__settings__ = (pageData.settings || {});
 
+// Portal type toggle
+let currentPortalType = localStorage.getItem('portalsType') || 'stalker';
+
+function setPortalType(type) {
+    currentPortalType = type;
+    localStorage.setItem('portalsType', type);
+
+    document.querySelectorAll('.portal-type-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.portalType === type);
+    });
+
+    document.querySelectorAll('.portal-card[data-portal-type], .portal-list-item[data-portal-type]').forEach(el => {
+        el.style.display = (el.dataset.portalType === type) ? '' : 'none';
+    });
+
+    const addStalker = document.getElementById('addPortalBtnStalker');
+    const addXtream = document.getElementById('addPortalBtnXtream');
+    if (addStalker && addXtream) {
+        addStalker.style.display = type === 'stalker' ? '' : 'none';
+        addXtream.style.display = type === 'xtream' ? '' : 'none';
+    }
+}
+
+// Wire portal type tabs
+document.querySelectorAll('.portal-type-tab').forEach(btn => {
+    btn.addEventListener('click', () => setPortalType(btn.dataset.portalType));
+});
+setPortalType(currentPortalType);
+
 // View toggle
 function setView(view) {
     const cardView = document.getElementById('cardView');
@@ -42,6 +71,10 @@ let currentEditSelectedGenres = [];
 function editPortal(portalId) {
     const portal = portalsData[portalId];
     if (!portal) return;
+    if ((portal.type || 'stalker') === 'xtream') {
+        editXtreamPortal(portalId);
+        return;
+    }
 
     currentEditPortalId = portalId;
     currentEditSelectedGenres = portal.selected_genres || [];
@@ -69,6 +102,35 @@ function editPortal(portalId) {
     new bootstrap.Modal(document.getElementById('editPortalModal')).show();
 }
 
+function editXtreamPortal(portalId) {
+    const portal = portalsData[portalId];
+    if (!portal) return;
+
+    currentEditPortalId = portalId;
+    currentEditSelectedGenres = portal.selected_genres || [];
+
+    const toBool = (value, fallback = false) => {
+        if (value === undefined || value === null) return fallback;
+        if (value === true || value === false) return value;
+        if (typeof value === 'number') return value !== 0;
+        return String(value).toLowerCase() === 'true';
+    };
+
+    document.getElementById('edit_xtream_portal_id').value = portalId;
+    document.getElementById('edit_xtream_enabled').checked = toBool(portal.enabled, true);
+    document.getElementById('edit_xtream_name').value = portal.name;
+    document.getElementById('edit_xtream_portal_code').value = portal["portal code"] || "";
+    document.getElementById('edit_xtream_url').value = portal.url;
+    document.getElementById('edit_xtream_username').value = portal["xtream username"] || "";
+    document.getElementById('edit_xtream_password').value = portal["xtream password"] || "";
+    document.getElementById('edit_xtream_proxy').value = portal.proxy || '';
+    document.getElementById('edit_xtream_fetch_epg').checked = toBool(portal['fetch epg'], true);
+    document.getElementById('edit_xtream_auto_normalize').checked = toBool(portal['auto normalize names'], false);
+    document.getElementById('edit_xtream_auto_match').checked = toBool(portal['auto match'], false);
+
+    new bootstrap.Modal(document.getElementById('editXtreamPortalModal')).show();
+}
+
 // Preserve selected_genres when updating portal
 document.getElementById('editPortalForm')?.addEventListener('submit', function(e) {
     // Remove any existing hidden genre inputs
@@ -85,6 +147,32 @@ document.getElementById('editPortalForm')?.addEventListener('submit', function(e
 
     // Ensure modal/backdrop is closed before HTMX swaps content
     const modalEl = document.getElementById('editPortalModal');
+    if (modalEl) {
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+        modalEl.classList.remove('show');
+        modalEl.style.display = 'none';
+        modalEl.setAttribute('aria-hidden', 'true');
+    }
+    document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+    document.body.classList.remove('modal-open');
+    document.body.style.removeProperty('padding-right');
+    document.body.style.removeProperty('overflow');
+});
+
+// Preserve selected_genres when updating Xtream portal
+document.getElementById('editXtreamPortalForm')?.addEventListener('submit', function(e) {
+    this.querySelectorAll('input[name="selected_genres"]').forEach(el => el.remove());
+
+    currentEditSelectedGenres.forEach(g => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'selected_genres';
+        input.value = g;
+        this.appendChild(input);
+    });
+
+    const modalEl = document.getElementById('editXtreamPortalModal');
     if (modalEl) {
         const modal = bootstrap.Modal.getInstance(modalEl);
         if (modal) modal.hide();
@@ -750,23 +838,37 @@ async function openGenreModal(portalId) {
 
     // Fallback: Fetch genres from portal API (for new portals without channels yet)
     try {
-        const firstMac = Object.keys(portal.macs)[0];
-        if (!firstMac) {
-            document.getElementById('genreModalLoading').style.display = 'none';
-            document.getElementById('genreModalErrorMessage').textContent = 'Keine MACs für dieses Portal vorhanden.';
-            document.getElementById('genreModalError').style.display = 'block';
-            return;
+        let response;
+        if ((portal.type || 'stalker') === 'xtream') {
+            response = await fetch('/api/portal/xtream/categories/list', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: portal.url,
+                    username: portal['xtream username'] || '',
+                    password: portal['xtream password'] || '',
+                    proxy: portal.proxy || ''
+                })
+            });
+        } else {
+            const firstMac = Object.keys(portal.macs)[0];
+            if (!firstMac) {
+                document.getElementById('genreModalLoading').style.display = 'none';
+                document.getElementById('genreModalErrorMessage').textContent = 'Keine MACs für dieses Portal vorhanden.';
+                document.getElementById('genreModalError').style.display = 'block';
+                return;
+            }
+            currentGenreModalMac = firstMac;
+            response = await fetch('/api/portal/genres/list', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: portal.url,
+                    mac: firstMac,
+                    proxy: portal.proxy || ''
+                })
+            });
         }
-        currentGenreModalMac = firstMac;
-        const response = await fetch('/api/portal/genres/list', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: portal.url,
-                mac: firstMac,
-                proxy: portal.proxy || ''
-            })
-        });
 
         const data = await response.json();
         document.getElementById('genreModalLoading').style.display = 'none';

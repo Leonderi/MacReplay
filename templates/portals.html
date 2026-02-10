@@ -16,6 +16,14 @@
                 <p class="text-muted mb-0">Manage your IPTV portals and MAC addresses</p>
             </div>
             <div class="d-flex gap-2 align-items-center">
+                <div class="btn-group portal-type-toggle" role="group">
+                    <button type="button" class="btn btn-outline-secondary portal-type-tab" data-portal-type="stalker" title="Stalker/MAC Portals">
+                        <i class="fas fa-satellite"></i> Stalker
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary portal-type-tab" data-portal-type="xtream" title="Xtream Codes Portals">
+                        <i class="fas fa-key"></i> Xtream
+                    </button>
+                </div>
                 <div class="btn-group view-toggle" role="group">
                     <button type="button" class="btn btn-outline-secondary" id="cardViewBtn" onclick="setView('card')" title="Card View">
                         <i class="fas fa-th-large"></i>
@@ -24,8 +32,11 @@
                         <i class="fas fa-list"></i>
                     </button>
                 </div>
-                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addPortalModal">
+                <button class="btn btn-primary" id="addPortalBtnStalker" data-bs-toggle="modal" data-bs-target="#addPortalModal">
                     <i class="fas fa-plus"></i> Add Portal
+                </button>
+                <button class="btn btn-primary" id="addPortalBtnXtream" data-bs-toggle="modal" data-bs-target="#addXtreamPortalModal" style="display:none;">
+                    <i class="fas fa-plus"></i> Add Xtream
                 </button>
             </div>
         </div>
@@ -38,7 +49,7 @@
     <div class="row">
         {% for portal_id, portal in portals.items() %}
         <div class="col-md-6 col-lg-4 mb-4">
-            <div class="card h-100 portal-card" data-portal-id="{{ portal_id }}">
+            <div class="card h-100 portal-card" data-portal-id="{{ portal_id }}" data-portal-type="{{ portal.get('type', 'stalker') }}">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">{{ portal.name or 'Unnamed Portal' }}</h5>
                     <div class="d-flex align-items-center gap-1 portal-flag-buttons" onclick="event.stopPropagation()">
@@ -79,9 +90,15 @@
                             {% endif %}
                         </div>
                     </div>
+                    {% if portal.get('type', 'stalker') == 'xtream' %}
+                    <p class="card-text">
+                        <strong>Username:</strong> {{ portal.get('xtream username', '') }}
+                    </p>
+                    {% else %}
                     <p class="card-text">
                         <strong>MAC Addresses:</strong> {{ portal.macs|length }}
                     </p>
+                    {% endif %}
                     <p class="card-text">
                         <strong>Streams per MAC:</strong> {{ portal['streams per mac'] }}
                     </p>
@@ -115,7 +132,7 @@
 <div class="portal-list-view" id="listView">
     <div class="portal-list">
         {% for portal_id, portal in portals.items() %}
-        <div class="portal-list-item" data-portal-id="{{ portal_id }}">
+        <div class="portal-list-item" data-portal-id="{{ portal_id }}" data-portal-type="{{ portal.get('type', 'stalker') }}">
             <div class="portal-header" onclick="togglePortal('{{ portal_id }}')">
                 <i class="fas fa-chevron-right expand-icon"></i>
                 <div class="portal-name-container">
@@ -131,10 +148,17 @@
                         <i class="fas fa-folder"></i>
                         <span class="portal-meta-value">{{ portal_stats.get(portal_id, {}).get('total_groups', portal_stats.get(portal_id, {}).get('groups', 0)) }}</span>
                     </span>
+                    {% if portal.get('type', 'stalker') == 'stalker' %}
                     <span class="portal-meta-item portal-stat-macs" title="MACs">
                         <i class="fas fa-network-wired"></i>
                         <span class="portal-meta-value">{{ portal.macs|length }}</span>
                     </span>
+                    {% else %}
+                    <span class="portal-meta-item portal-stat-macs" title="User">
+                        <i class="fas fa-user"></i>
+                        <span class="portal-meta-value">{{ portal.get('xtream username', '') }}</span>
+                    </span>
+                    {% endif %}
                     <span class="portal-meta-item portal-stat-expiry" title="Days until next MAC expires" data-portal-id="{{ portal_id }}">
                         <i class="fas fa-clock"></i>
                         <span class="portal-expiry-value">-</span>
@@ -207,6 +231,7 @@
                     {% endif %}
                 </div>
 
+                {% if portal.get('type', 'stalker') == 'stalker' %}
                 <div class="mac-section-header d-flex justify-content-between align-items-center">
                     <span class="mac-section-title">
                         <i class="fas fa-list"></i> MAC Addresses ({{ portal.macs|length }})
@@ -264,6 +289,7 @@
                     <i class="fas fa-network-wired fa-2x mb-2"></i>
                     <p>No MAC addresses configured</p>
                 </div>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
@@ -338,6 +364,69 @@
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-primary">
                         <i class="fas fa-plus"></i> Add Portal
+                    </button>
+                </div>
+            </form>
+</div>
+</div>
+</div>
+
+<!-- Add Xtream Portal Modal -->
+<div class="modal fade" id="addXtreamPortalModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="POST" action="/portal/add_xtream" id="addXtreamPortalForm">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add Xtream Portal</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="add_xtream_name" class="form-label">Portal Name</label>
+                        <input type="text" class="form-control" id="add_xtream_name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="add_xtream_portal_code" class="form-label">Portal Code (Optional)</label>
+                        <input type="text" class="form-control" id="add_xtream_portal_code" name="portal code" maxlength="2" placeholder="DE">
+                        <div class="form-text">Two-letter code used in playlist naming</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="add_xtream_url" class="form-label">Server URL</label>
+                        <input type="url" class="form-control" id="add_xtream_url" name="url" placeholder="http://server:port" required>
+                        <div class="form-text">Base URL without player_api.php</div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <label for="add_xtream_username" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="add_xtream_username" name="xtream_username" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="add_xtream_password" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="add_xtream_password" name="xtream_password" required>
+                        </div>
+                    </div>
+                    <div class="mb-3 mt-3">
+                        <label for="add_xtream_proxy" class="form-label">Proxy (Optional)</label>
+                        <input type="text" class="form-control" id="add_xtream_proxy" name="proxy" placeholder="http://proxy:port">
+                    </div>
+                    <div class="mb-3 d-flex flex-wrap gap-2">
+                        <input type="checkbox" class="btn-check" id="add_xtream_fetch_epg" name="fetch epg" value="true" checked autocomplete="off">
+                        <label class="btn btn-outline-primary btn-sm" for="add_xtream_fetch_epg">Fetch EPG</label>
+
+                        <input type="checkbox" class="btn-check" id="add_xtream_auto_normalize" name="auto normalize names" value="true" autocomplete="off">
+                        <label class="btn btn-outline-primary btn-sm" for="add_xtream_auto_normalize">Auto Normalize</label>
+
+                        <input type="checkbox" class="btn-check" id="add_xtream_auto_match" name="auto match" value="true" autocomplete="off">
+                        <label class="btn btn-outline-primary btn-sm" for="add_xtream_auto_match">Auto Match</label>
+                    </div>
+                    <div class="alert alert-secondary">
+                        <i class="fas fa-info-circle"></i> After adding the portal, use the <strong>Groups</strong> button to select which categories to import.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Add Xtream
                     </button>
                 </div>
             </form>
@@ -417,6 +506,75 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-primary">Update Portal</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Xtream Portal Modal -->
+<div class="modal fade" id="editXtreamPortalModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="POST" action="/portal/update_xtream" id="editXtreamPortalForm">
+                <input type="hidden" id="edit_xtream_portal_id" name="id">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Xtream Portal</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="edit_xtream_enabled" name="enabled" value="true">
+                            <label class="form-check-label" for="edit_xtream_enabled">
+                                Portal Enabled
+                            </label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_xtream_name" class="form-label">Portal Name</label>
+                        <input type="text" class="form-control" id="edit_xtream_name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_xtream_portal_code" class="form-label">Portal Code (Optional)</label>
+                        <input type="text" class="form-control" id="edit_xtream_portal_code" name="portal code" maxlength="2" placeholder="DE">
+                        <div class="form-text">Two-letter code used in playlist naming</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_xtream_url" class="form-label">Server URL</label>
+                        <input type="url" class="form-control" id="edit_xtream_url" name="url" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <label for="edit_xtream_username" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="edit_xtream_username" name="xtream_username" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_xtream_password" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="edit_xtream_password" name="xtream_password" required>
+                        </div>
+                    </div>
+                    <div class="mb-3 mt-3">
+                        <label for="edit_xtream_proxy" class="form-label">Proxy (Optional)</label>
+                        <input type="text" class="form-control" id="edit_xtream_proxy" name="proxy">
+                    </div>
+                    <div class="mb-3 d-flex flex-wrap gap-2">
+                        <input type="checkbox" class="btn-check" id="edit_xtream_fetch_epg" name="fetch epg" value="true" autocomplete="off">
+                        <label class="btn btn-outline-primary btn-sm" for="edit_xtream_fetch_epg">Fetch EPG</label>
+
+                        <input type="checkbox" class="btn-check" id="edit_xtream_auto_normalize" name="auto normalize names" value="true" autocomplete="off">
+                        <label class="btn btn-outline-primary btn-sm" for="edit_xtream_auto_normalize">Auto Normalize</label>
+
+                        <input type="checkbox" class="btn-check" id="edit_xtream_auto_match" name="auto match" value="true" autocomplete="off">
+                        <label class="btn btn-outline-primary btn-sm" for="edit_xtream_auto_match">Auto Match</label>
+                    </div>
+                    <div class="alert alert-secondary mt-3">
+                        <i class="fas fa-info-circle"></i> Use the <strong>Groups</strong> button in the portal list to manage which categories to import.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Update Xtream</button>
                 </div>
             </form>
         </div>

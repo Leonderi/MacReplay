@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, Response, make_response, redirect, request, send_file
 
 import stb
+import xtream
 
 
 def create_streaming_blueprint(
@@ -145,6 +146,7 @@ def create_streaming_blueprint(
         url = portal.get("url")
         streamsPerMac = int(portal.get("streams per mac"))
         proxy = portal.get("proxy")
+        portal_type = portal.get("type", "stalker")
         web = request.args.get("web")
         ip = request.remote_addr
         channelName = portal.get("custom channel names", {}).get(channelId)
@@ -177,6 +179,51 @@ def create_streaming_blueprint(
         channel_ids_to_try = [channelId] + alternate_ids
         if alternate_ids:
             logger.debug(f"Channel {channelId} has alternate IDs: {alternate_ids}")
+
+        if portal_type == "xtream":
+            username = portal.get("xtream username", "")
+            password = portal.get("xtream password", "")
+            link = cached_cmd or xtream.build_stream_url(url, username, password, channelId)
+            if not link:
+                return make_response("Stream not available", 503)
+
+            if web:
+                ffmpegcmd = [
+                    "ffmpeg",
+                    "-loglevel",
+                    "panic",
+                    "-hide_banner",
+                    "-i",
+                    link,
+                    "-vcodec",
+                    "copy",
+                    "-f",
+                    "mp4",
+                    "-movflags",
+                    "frag_keyframe+empty_moov",
+                    "pipe:",
+                ]
+                if proxy:
+                    ffmpegcmd.insert(1, "-http_proxy")
+                    ffmpegcmd.insert(2, proxy)
+                return Response(streamData(), mimetype="application/octet-stream")
+
+            if getSettings().get("stream method", "ffmpeg") == "ffmpeg":
+                ffmpegcmd = str(getSettings()["ffmpeg command"])
+                ffmpegcmd = ffmpegcmd.replace("<url>", link)
+                ffmpegcmd = ffmpegcmd.replace(
+                    "<timeout>",
+                    str(int(getSettings()["ffmpeg timeout"]) * int(1000000)),
+                )
+                if proxy:
+                    ffmpegcmd = ffmpegcmd.replace("<proxy>", proxy)
+                else:
+                    ffmpegcmd = ffmpegcmd.replace("-http_proxy <proxy>", "")
+                " ".join(ffmpegcmd.split())
+                ffmpegcmd = ffmpegcmd.split()
+                return Response(streamData(), mimetype="application/octet-stream")
+
+            return redirect(link)
 
         macs_dict = portal["macs"]
         occupied_list = occupied.get(portalId, [])
@@ -388,6 +435,7 @@ def create_streaming_blueprint(
         url = portal.get("url")
         macs = list(portal["macs"].keys())
         proxy = portal.get("proxy")
+        portal_type = portal.get("type", "stalker")
         ip = request.remote_addr
 
         logger.info(
@@ -432,34 +480,53 @@ def create_streaming_blueprint(
                 f"Fetching stream URL for channel {channelId} from portal {portalName}"
             )
             link = None
-            for mac in macs:
+            if portal_type == "xtream":
+                username = portal.get("xtream username", "")
+                password = portal.get("xtream password", "")
                 try:
-                    logger.debug(f"Trying MAC: {mac}")
-                    token = stb.getToken(url, mac, proxy)
-                    if token:
-                        stb.getProfile(url, mac, token, proxy)
-                        channels = stb.getAllChannels(url, mac, token, proxy)
-
-                        if channels:
-                            for c in channels:
-                                if str(c["id"]) == channelId:
-                                    cmd = c["cmd"]
-                                    if "http://localhost/" in cmd:
-                                        link = stb.getLink(url, mac, token, cmd, proxy)
-                                    else:
-                                        link = cmd.split(" ")[1]
-                                    logger.debug(
-                                        f"Found stream URL for channel {channelId}"
-                                    )
-                                    break
-
-                        if link:
-                            break
-                except Exception as e:
-                    logger.error(
-                        f"Error getting stream URL for HLS with MAC {mac}: {e}"
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT cmd FROM channels WHERE portal_id = ? AND channel_id = ?",
+                        [portalId, channelId],
                     )
-                    continue
+                    row = cursor.fetchone()
+                    conn.close()
+                    if row and row[0]:
+                        link = row[0]
+                except Exception:
+                    link = None
+                if not link:
+                    link = xtream.build_stream_url(url, username, password, channelId)
+            else:
+                for mac in macs:
+                    try:
+                        logger.debug(f"Trying MAC: {mac}")
+                        token = stb.getToken(url, mac, proxy)
+                        if token:
+                            stb.getProfile(url, mac, token, proxy)
+                            channels = stb.getAllChannels(url, mac, token, proxy)
+
+                            if channels:
+                                for c in channels:
+                                    if str(c["id"]) == channelId:
+                                        cmd = c["cmd"]
+                                        if "http://localhost/" in cmd:
+                                            link = stb.getLink(url, mac, token, cmd, proxy)
+                                        else:
+                                            link = cmd.split(" ")[1]
+                                        logger.debug(
+                                            f"Found stream URL for channel {channelId}"
+                                        )
+                                        break
+
+                            if link:
+                                break
+                    except Exception as e:
+                        logger.error(
+                            f"Error getting stream URL for HLS with MAC {mac}: {e}"
+                        )
+                        continue
 
             if not link:
                 logger.error(

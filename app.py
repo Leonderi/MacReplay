@@ -129,6 +129,7 @@ except (subprocess.CalledProcessError, FileNotFoundError):
 
 
 import stb
+import xtream
 from macreplay.app_factory import create_app
 import waitress
 import sqlite3
@@ -2987,7 +2988,63 @@ class HLSStreamManager:
 hls_manager = HLSStreamManager(max_streams=10, inactive_timeout=30)
 
 
+def fetch_xtream_channels(portal_id, portal):
+    portal_name = portal["name"]
+    url = portal["url"]
+    proxy = portal.get("proxy", "")
+    username = portal.get("xtream username", "")
+    password = portal.get("xtream password", "")
+
+    logger.info(f"Fetching Xtream channels for portal: {portal_name}")
+
+    channels_by_id = {}
+    all_genres = {}
+
+    categories = xtream.get_live_categories(url, username, password, proxy) or []
+    for cat in categories:
+        if not isinstance(cat, dict):
+            continue
+        cat_id = str(cat.get("category_id") or "")
+        cat_name = cat.get("category_name") or cat.get("name") or ""
+        if cat_id:
+            all_genres[cat_id] = cat_name
+
+    streams = xtream.get_live_streams(url, username, password, proxy) or []
+    logger.info(f"Xtream portal returned {len(streams)} streams")
+
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        stream_id = str(stream.get("stream_id") or stream.get("id") or "")
+        if not stream_id:
+            continue
+        channel = {
+            "id": stream_id,
+            "name": stream.get("name") or "",
+            "number": str(stream.get("num") or stream.get("number") or ""),
+            "tv_genre_id": str(stream.get("category_id") or ""),
+            "logo": stream.get("stream_icon") or stream.get("icon") or "",
+            "cmd": xtream.build_stream_url(url, username, password, stream_id),
+        }
+        channels_by_id[stream_id] = {
+            "data": channel,
+            "available_macs": []
+        }
+
+    return {
+        "portal_id": portal_id,
+        "portal": portal,
+        "portal_name": portal_name,
+        "channels_by_id": channels_by_id,
+        "all_genres": all_genres
+    }
+
+
 def fetch_portal_channels(portal_id, portal):
+    portal_type = portal.get("type", "stalker")
+    if portal_type == "xtream":
+        return fetch_xtream_channels(portal_id, portal)
+
     portal_name = portal["name"]
     url = portal["url"]
     macs = list(portal["macs"].keys())
@@ -3636,8 +3693,9 @@ def refresh_xmltv_for_portal(portal_id):
     fetch_epg = portal.get("fetch epg", True)
     portal_epg_offset = int(portal.get("epg offset", 0))
     url = portal.get("url", "")
-    macs = list(portal.get("macs", {}).keys())
     proxy = portal.get("proxy", "")
+    portal_type = portal.get("type", "stalker")
+    macs = list(portal.get("macs", {}).keys())
 
     logger.info(
         "Refreshing EPG for portal: %s | fetch=%s | offset=%s | channels=%s",
@@ -3648,25 +3706,38 @@ def refresh_xmltv_for_portal(portal_id):
     )
 
     epg = None
-    if fetch_epg:
-        for mac in macs:
-            try:
-                token = stb.getToken(url, mac, proxy)
-                if not token:
-                    logger.warning("EPG fetch: token missing for MAC %s (portal %s)", mac, portal_name)
-                    continue
-                stb.getProfile(url, mac, token, proxy)
-                stb.getAllChannels(url, mac, token, proxy)
-                epg = stb.getEpg(url, mac, token, epg_future_hours, proxy)
-                if epg:
-                    logger.info("Successfully fetched EPG from MAC %s (portal %s)", mac, portal_name)
-                    break
-                logger.warning("EPG fetch returned empty data for MAC %s (portal %s)", mac, portal_name)
-            except Exception as e:
-                logger.error("Error fetching EPG for MAC %s (portal %s): %s", mac, portal_name, e)
-                continue
+    if portal_type == "xtream":
+        username = portal.get("xtream username", "")
+        password = portal.get("xtream password", "")
+        if fetch_epg:
+            stream_ids = [row["channel_id"] for row in enabled_rows if row.get("channel_id")]
+            epg = xtream.get_simple_epg_map(url, username, password, stream_ids, proxy)
+            if epg:
+                logger.info("Successfully fetched Xtream EPG for portal %s", portal_name)
+            else:
+                logger.warning("Xtream EPG fetch returned empty data for portal %s", portal_name)
+        else:
+            logger.info("Skipping EPG fetch for portal %s (disabled).", portal_name)
     else:
-        logger.info("Skipping EPG fetch for portal %s (disabled).", portal_name)
+        if fetch_epg:
+            for mac in macs:
+                try:
+                    token = stb.getToken(url, mac, proxy)
+                    if not token:
+                        logger.warning("EPG fetch: token missing for MAC %s (portal %s)", mac, portal_name)
+                        continue
+                    stb.getProfile(url, mac, token, proxy)
+                    stb.getAllChannels(url, mac, token, proxy)
+                    epg = stb.getEpg(url, mac, token, epg_future_hours, proxy)
+                    if epg:
+                        logger.info("Successfully fetched EPG from MAC %s (portal %s)", mac, portal_name)
+                        break
+                    logger.warning("EPG fetch returned empty data for MAC %s (portal %s)", mac, portal_name)
+                except Exception as e:
+                    logger.error("Error fetching EPG for MAC %s (portal %s): %s", mac, portal_name, e)
+                    continue
+        else:
+            logger.info("Skipping EPG fetch for portal %s (disabled).", portal_name)
 
     _store_portal_epg_to_db(
         portal_id=portal_id,
