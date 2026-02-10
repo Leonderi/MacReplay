@@ -3018,13 +3018,19 @@ def fetch_xtream_channels(portal_id, portal):
         stream_id = str(stream.get("stream_id") or stream.get("id") or "")
         if not stream_id:
             continue
+        direct_source = stream.get("direct_source") or stream.get("direct_source_url") or ""
+        ext = stream.get("container_extension") or stream.get("container") or ""
+        if isinstance(ext, str) and ext.startswith("."):
+            ext = ext[1:]
+        cmd = direct_source or xtream.build_stream_url(url, username, password, stream_id, ext=ext or "m3u8")
+
         channel = {
             "id": stream_id,
             "name": stream.get("name") or "",
             "number": str(stream.get("num") or stream.get("number") or ""),
             "tv_genre_id": str(stream.get("category_id") or ""),
             "logo": stream.get("stream_icon") or stream.get("icon") or "",
-            "cmd": xtream.build_stream_url(url, username, password, stream_id),
+            "cmd": cmd,
         }
         channels_by_id[stream_id] = {
             "data": channel,
