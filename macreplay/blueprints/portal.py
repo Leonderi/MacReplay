@@ -462,8 +462,15 @@ def create_portal_blueprint(
             logger.info("Portal(%s) added!", portal["name"])
             flash(f"Portal({portal['name']}) added!", "success")
 
-            job_manager.enqueue_refresh_all(reason="portal_add")
-            flash("Channels are being loaded in the background.", "info")
+            refresh_status = job_manager.enqueue_refresh_portal(portal_id, reason="portal_add")
+            if refresh_status == "queued":
+                flash("Portal refresh queued.", "info")
+            elif refresh_status == "running":
+                flash("Portal refresh already running.", "warning")
+            elif refresh_status == "completed":
+                flash("Portal refresh completed.", "success")
+            else:
+                flash("Portal refresh started.", "info")
 
         else:
             logger.error(
@@ -525,8 +532,15 @@ def create_portal_blueprint(
         logger.info("Xtream Portal(%s) added!", portal["name"])
         flash(f"Xtream Portal({portal['name']}) added!", "success")
 
-        job_manager.enqueue_refresh_all(reason="portal_add")
-        flash("Channels are being loaded in the background.", "info")
+        refresh_status = job_manager.enqueue_refresh_portal(portal_id, reason="portal_add")
+        if refresh_status == "queued":
+            flash("Portal refresh queued.", "info")
+        elif refresh_status == "running":
+            flash("Portal refresh already running.", "warning")
+        elif refresh_status == "completed":
+            flash("Portal refresh completed.", "success")
+        else:
+            flash("Portal refresh started.", "info")
 
         return redirect("/portals", code=302)
 
