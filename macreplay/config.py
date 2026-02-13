@@ -135,6 +135,10 @@ defaultSettings = {
     "enable security": False,
     "username": "admin",
     "password": "12345",
+    "access users": [],
+    "xtream api enabled": False,
+    "xtream api username": "xtream",
+    "xtream api password": "xtream123",
     "enable hdhr": True,
     "hdhr name": "MacReplay",
     "hdhr id": str(uuid.uuid4().hex),
@@ -167,6 +171,7 @@ defaultSettings = {
     "espn cache ttl hours": 24,
     "events match debug": False,
     "events match window hours": 0.75,
+    "events auto create interval minutes": 0,
     "events cleanup interval minutes": 5,
 }
 
@@ -179,6 +184,8 @@ defaultPortal = {
     "macs": {},
     "xtream username": "",
     "xtream password": "",
+    "xtream logins": [],
+    "xtream user agent": "",
     "streams per mac": 1,
     "epg offset": 0,
     "proxy": "",

@@ -15,4 +15,15 @@ def create_app(*, state=None, test_config=None):
         app.config.update(test_config)
     if state:
         register_blueprints(app=app, state=state)
+
+    @app.context_processor
+    def inject_static_version():
+        # Cache-bust static assets so browser always pulls latest JS/CSS after deploy.
+        try:
+            style_path = os.path.join(static_dir, "style.css")
+            static_version = int(os.path.getmtime(style_path))
+        except Exception:
+            static_version = 1
+        return {"static_version": static_version}
+
     return app

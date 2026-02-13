@@ -27,6 +27,59 @@
                 <input type="password" class="form-control" id="password" name="password"
                        value="{{ settings['password'] }}" autocomplete="current-password" required>
             </div>
+
+            <hr class="my-4">
+            <h6 class="mb-3"><i class="fas fa-code"></i> Xtream API</h6>
+            <input type="hidden" name="xtream api enabled" value="false">
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="xtream_api_enabled" name="xtream api enabled"
+                       value="true" {{ 'checked' if settings['xtream api enabled'] }}>
+                <label class="form-check-label" for="xtream_api_enabled">
+                    Enable Xtream API endpoints
+                </label>
+                <div class="form-text">
+                    Aktiviert <code>/player_api.php</code>, <code>/get.php</code> und <code>/live/&lt;user&gt;/&lt;pass&gt;/&lt;stream_id&gt;.ts</code>.
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label for="xtream_api_username" class="form-label">Xtream API Username</label>
+                <input type="text" class="form-control" id="xtream_api_username" name="xtream api username"
+                       value="{{ settings['xtream api username'] }}" autocomplete="username">
+            </div>
+
+            <div class="mb-3">
+                <label for="xtream_api_password" class="form-label">Xtream API Password</label>
+                <input type="password" class="form-control" id="xtream_api_password" name="xtream api password"
+                       value="{{ settings['xtream api password'] }}" autocomplete="current-password">
+            </div>
+
+            <hr class="my-4">
+            <h6 class="mb-3"><i class="fas fa-users"></i> Users & Access Flags</h6>
+            <input type="hidden" id="access_users_input" name="access users" value='{{ settings.get("access users", []) | tojson }}'>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle" id="accessUsersTable">
+                    <thead>
+                        <tr>
+                            <th>Enabled</th>
+                            <th>Username</th>
+                            <th>Password</th>
+                            <th>Web</th>
+                            <th>Admin</th>
+                            <th>M3U</th>
+                            <th>XC</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="addAccessUserBtn">
+                <i class="fas fa-plus"></i> Add User
+            </button>
+            <div class="form-text mt-2">
+                Flags: <code>web</code> = UI/API Zugriff, <code>admin</code> = Änderungen (POST/PUT/DELETE), <code>m3u</code> = <code>/playlist.m3u</code> + <code>/xmltv</code>, <code>xc</code> = Xtream API.
+            </div>
         </div>
     </div>
 
@@ -36,4 +89,98 @@
         </button>
     </div>
 </form>
+
+<template id="accessUserRowTemplate">
+    <tr>
+        <td><input type="checkbox" class="form-check-input user-enabled" checked></td>
+        <td><input type="text" class="form-control form-control-sm user-username" placeholder="username"></td>
+        <td><input type="text" class="form-control form-control-sm user-password" placeholder="password"></td>
+        <td><input type="checkbox" class="form-check-input user-web" checked></td>
+        <td><input type="checkbox" class="form-check-input user-admin"></td>
+        <td><input type="checkbox" class="form-check-input user-m3u"></td>
+        <td><input type="checkbox" class="form-check-input user-xc"></td>
+        <td>
+            <button type="button" class="btn btn-outline-danger btn-sm remove-user-btn">
+                <i class="fas fa-trash"></i>
+            </button>
+        </td>
+    </tr>
+</template>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+(function() {
+    const tableBody = document.querySelector('#accessUsersTable tbody');
+    const template = document.getElementById('accessUserRowTemplate');
+    const hiddenInput = document.getElementById('access_users_input');
+    const addBtn = document.getElementById('addAccessUserBtn');
+    const form = document.querySelector('form[action="/settings/save"]');
+
+    if (!tableBody || !template || !hiddenInput || !form) return;
+
+    function createRow(user) {
+        const fragment = template.content.cloneNode(true);
+        const tr = fragment.querySelector('tr');
+        tr.querySelector('.user-enabled').checked = !!(user && user.enabled !== false);
+        tr.querySelector('.user-username').value = (user && user.username) ? String(user.username) : '';
+        tr.querySelector('.user-password').value = (user && user.password) ? String(user.password) : '';
+        tr.querySelector('.user-web').checked = !!(user && user.web !== false);
+        tr.querySelector('.user-admin').checked = !!(user && user.admin);
+        tr.querySelector('.user-m3u').checked = !!(user && user.m3u);
+        tr.querySelector('.user-xc').checked = !!(user && user.xc);
+        tr.querySelector('.remove-user-btn').addEventListener('click', function() {
+            tr.remove();
+        });
+        return fragment;
+    }
+
+    function loadInitialUsers() {
+        let users = [];
+        try {
+            const parsed = JSON.parse(hiddenInput.value || '[]');
+            if (Array.isArray(parsed)) users = parsed;
+        } catch (e) {
+            users = [];
+        }
+        tableBody.innerHTML = '';
+        users.forEach(function(user) {
+            tableBody.appendChild(createRow(user));
+        });
+    }
+
+    function collectUsers() {
+        const rows = Array.from(tableBody.querySelectorAll('tr'));
+        const users = [];
+        rows.forEach(function(tr) {
+            const username = tr.querySelector('.user-username').value.trim();
+            const password = tr.querySelector('.user-password').value.trim();
+            if (!username || !password) return;
+            users.push({
+                enabled: tr.querySelector('.user-enabled').checked,
+                username: username,
+                password: password,
+                web: tr.querySelector('.user-web').checked,
+                admin: tr.querySelector('.user-admin').checked,
+                m3u: tr.querySelector('.user-m3u').checked,
+                xc: tr.querySelector('.user-xc').checked
+            });
+        });
+        return users;
+    }
+
+    if (addBtn) {
+        addBtn.addEventListener('click', function() {
+            tableBody.appendChild(createRow({ enabled: true, web: true }));
+        });
+    }
+
+    form.addEventListener('submit', function() {
+        hiddenInput.value = JSON.stringify(collectUsers());
+    });
+
+    loadInitialUsers();
+})();
+</script>
 {% endblock %}

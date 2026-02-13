@@ -38,7 +38,7 @@ function displayStreams(streams) {
         return;
     }
 
-    let html = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>Portal</th><th>Channel</th><th>MAC</th><th>Client IP</th><th>Start Time</th><th>Duration</th></tr></thead><tbody>';
+    let html = '<div class="table-responsive"><table class="table table-striped dashboard-streams-table"><thead><tr><th>Portal</th><th>Channel</th><th>MAC</th><th>Client IP</th><th>Start Time</th><th>Duration</th></tr></thead><tbody>';
 
     Object.keys(streams).forEach(portalId => {
         streams[portalId].forEach(stream => {

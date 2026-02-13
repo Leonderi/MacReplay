@@ -23,9 +23,59 @@ def create_streaming_blueprint(
     hls_manager,
 ):
     bp = Blueprint("streaming", __name__)
+    default_xtream_user_agent = "TiviMate/5.1.6 (Android 12)"
+
+    def force_ts_link(link):
+        if not link:
+            return link
+        if ".m3u8" in link:
+            return link.replace(".m3u8", ".ts")
+        return link
+
+    def get_xtream_login(portal):
+        logins = portal.get("xtream logins")
+        if isinstance(logins, list):
+            for login in logins:
+                if not isinstance(login, dict):
+                    continue
+                username = str(login.get("username") or "").strip()
+                password = str(login.get("password") or "").strip()
+                if username and password:
+                    return username, password
+        return (
+            str(portal.get("xtream username", "") or "").strip(),
+            str(portal.get("xtream password", "") or "").strip(),
+        )
 
     @bp.route("/play/<portalId>/<channelId>", methods=["GET"])
     def channel(portalId, channelId):
+        portal = getPortals().get(portalId)
+        if not portal:
+            logger.error("Play request for unknown portal: %s", portalId)
+            return make_response("Portal not found", 404)
+
+        portalName = portal.get("name")
+        url = portal.get("url")
+        streamsPerMac = int(portal.get("streams per mac"))
+        proxy = portal.get("proxy")
+        portal_type = portal.get("type", "stalker")
+        portal_user_agent = (portal.get("xtream user agent", "") or "").strip()
+        if portal_type == "xtream" and not portal_user_agent:
+            portal_user_agent = default_xtream_user_agent
+        web = request.args.get("web")
+        ip = request.remote_addr
+        channelName = portal.get("custom channel names", {}).get(channelId)
+        mac = None
+
+        logger.info(
+            "Play request | portal=%s type=%s channel=%s web=%s ip=%s",
+            portalId,
+            portal_type,
+            channelId,
+            bool(web),
+            ip,
+        )
+
         def streamData():
             ffmpeg_sp = None
             occupied_item = None
@@ -45,6 +95,8 @@ def create_streaming_blueprint(
                 except Exception:
                     pass
             def occupy():
+                if portal_type == "xtream":
+                    return
                 occupied.setdefault(portalId, [])
                 nonlocal occupied_item
                 occupied_item = {
@@ -61,6 +113,8 @@ def create_streaming_blueprint(
                 )
 
             def unoccupy():
+                if portal_type == "xtream":
+                    return
                 try:
                     if occupied_item and occupied_item in occupied.get(portalId, []):
                         occupied.get(portalId, []).remove(occupied_item)
@@ -90,17 +144,14 @@ def create_streaming_blueprint(
                     if len(chunk) == 0:
                         rc = ffmpeg_sp.poll()
                         if rc not in (None, 0):
-                            logger.info(
-                                "Ffmpeg closed with error({}). Moving MAC({}) for Portal({})".format(
-                                    str(rc), mac, portalName
-                                )
-                            )
+                            logger.info("Ffmpeg closed with error(%s) for Portal(%s)", str(rc), portalName)
                             with stderr_lock:
                                 if stderr_buffer:
                                     logger.info(
                                         "Ffmpeg stderr tail: %s", " | ".join(stderr_buffer[-8:])
                                     )
-                            moveMac(portalId, mac)
+                            if portal_type != "xtream" and mac:
+                                moveMac(portalId, mac)
                         break
                     yield chunk
             except Exception:
@@ -113,26 +164,9 @@ def create_streaming_blueprint(
                     except Exception:
                         pass
 
-        def testStream():
-            timeout = int(getSettings()["ffmpeg timeout"]) * int(1000000)
-            ffprobecmd = ["ffprobe", "-timeout", str(timeout), "-i", link]
-
-            if proxy:
-                ffprobecmd.insert(1, "-http_proxy")
-                ffprobecmd.insert(2, proxy)
-
-            with subprocess.Popen(
-                ffprobecmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ) as ffprobe_sb:
-                ffprobe_sb.communicate()
-                if ffprobe_sb.returncode == 0:
-                    return True
-                return False
-
         def isMacFree():
+            if portal_type == "xtream":
+                return True
             count = 0
             for i in occupied.get(portalId, []):
                 if i["mac"] == mac:
@@ -140,16 +174,6 @@ def create_streaming_blueprint(
             if count < streamsPerMac:
                 return True
             return False
-
-        portal = getPortals().get(portalId)
-        portalName = portal.get("name")
-        url = portal.get("url")
-        streamsPerMac = int(portal.get("streams per mac"))
-        proxy = portal.get("proxy")
-        portal_type = portal.get("type", "stalker")
-        web = request.args.get("web")
-        ip = request.remote_addr
-        channelName = portal.get("custom channel names", {}).get(channelId)
 
         available_macs = []
         alternate_ids = []
@@ -181,9 +205,12 @@ def create_streaming_blueprint(
             logger.debug(f"Channel {channelId} has alternate IDs: {alternate_ids}")
 
         if portal_type == "xtream":
-            username = portal.get("xtream username", "")
-            password = portal.get("xtream password", "")
-            link = cached_cmd or xtream.build_stream_url(url, username, password, channelId)
+            username, password = get_xtream_login(portal)
+            link = cached_cmd or xtream.build_stream_url(
+                url, username, password, channelId, ext="ts"
+            )
+            link = force_ts_link(link)
+            logger.info("Xtream preview link | channel=%s link=%s", channelId, link)
             if not link:
                 return make_response("Stream not available", 503)
 
@@ -191,21 +218,55 @@ def create_streaming_blueprint(
                 ffmpegcmd = [
                     "ffmpeg",
                     "-loglevel",
-                    "panic",
+                    "error",
                     "-hide_banner",
+                    "-analyzeduration",
+                    "0",
+                    "-probesize",
+                    "32768",
+                    "-reconnect",
+                    "1",
+                    "-reconnect_streamed",
+                    "1",
+                    "-reconnect_delay_max",
+                    "5",
+                    "-flags",
+                    "low_delay",
+                    "-fflags",
+                    "+nobuffer+genpts+discardcorrupt",
                     "-i",
                     link,
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a:0?",
                     "-vcodec",
                     "copy",
+                    "-acodec",
+                    "aac",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-b:a",
+                    "128k",
                     "-f",
                     "mp4",
                     "-movflags",
                     "frag_keyframe+empty_moov",
                     "pipe:",
                 ]
+                if portal_user_agent:
+                    ffmpegcmd.insert(1, "-user_agent")
+                    ffmpegcmd.insert(2, portal_user_agent)
                 if proxy:
                     ffmpegcmd.insert(1, "-http_proxy")
                     ffmpegcmd.insert(2, proxy)
+                logger.debug(
+                    "Xtream web ffmpeg command (ua=%s): %s",
+                    portal_user_agent,
+                    " ".join(ffmpegcmd),
+                )
                 return Response(streamData(), mimetype="application/octet-stream")
 
             if getSettings().get("stream method", "ffmpeg") == "ffmpeg":
@@ -221,6 +282,8 @@ def create_streaming_blueprint(
                     ffmpegcmd = ffmpegcmd.replace("-http_proxy <proxy>", "")
                 " ".join(ffmpegcmd.split())
                 ffmpegcmd = ffmpegcmd.split()
+                if portal_user_agent and ffmpegcmd and ffmpegcmd[0] == "ffmpeg":
+                    ffmpegcmd = [ffmpegcmd[0], "-user_agent", portal_user_agent] + ffmpegcmd[1:]
                 return Response(streamData(), mimetype="application/octet-stream")
 
             return redirect(link)
@@ -436,6 +499,9 @@ def create_streaming_blueprint(
         macs = list(portal["macs"].keys())
         proxy = portal.get("proxy")
         portal_type = portal.get("type", "stalker")
+        portal_user_agent = (portal.get("xtream user agent", "") or "").strip()
+        if portal_type == "xtream" and not portal_user_agent:
+            portal_user_agent = default_xtream_user_agent
         ip = request.remote_addr
 
         logger.info(
@@ -481,8 +547,7 @@ def create_streaming_blueprint(
             )
             link = None
             if portal_type == "xtream":
-                username = portal.get("xtream username", "")
-                password = portal.get("xtream password", "")
+                username, password = get_xtream_login(portal)
                 try:
                     conn = get_db_connection()
                     cursor = conn.cursor()
@@ -497,7 +562,10 @@ def create_streaming_blueprint(
                 except Exception:
                     link = None
                 if not link:
-                    link = xtream.build_stream_url(url, username, password, channelId)
+                    link = xtream.build_stream_url(
+                        url, username, password, channelId, ext="ts"
+                    )
+                link = force_ts_link(link)
             else:
                 for mac in macs:
                     try:
@@ -536,7 +604,9 @@ def create_streaming_blueprint(
 
             try:
                 logger.debug(f"Starting new stream for {stream_key}")
-                stream_info = hls_manager.start_stream(portalId, channelId, link, proxy)
+                stream_info = hls_manager.start_stream(
+                    portalId, channelId, link, proxy, user_agent=portal_user_agent
+                )
 
                 is_passthrough = stream_info.get("is_passthrough", False)
 

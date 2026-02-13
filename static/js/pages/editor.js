@@ -585,8 +585,12 @@
 
     // Tom Select instances
     let portalSelect, groupSelect, countrySelect, eventTagSelect;
+    let restoringFilters = false;
     // Store all groups data for dynamic filtering
     let allGroupsData = [];
+    let allCustomGroupsData = [];
+    const CUSTOM_GROUP_OPTGROUP = '__custom_groups__';
+    const CUSTOM_GROUP_LABEL = 'Custom Groups';
     const FILTER_STORAGE_KEY = 'editorFilters';
 
     function loadStoredFilters() {
@@ -621,6 +625,10 @@
     }
 
     function bindTriToggle(button) {
+        // Avoid duplicate event bindings when page init runs multiple times (HTMX/page script re-run).
+        if (!button || button.dataset.triBound === '1') return;
+        button.dataset.triBound = '1';
+
         button.addEventListener('mousemove', (e) => {
             const rect = button.getBoundingClientRect();
             const x = e.clientX - rect.left;
@@ -653,11 +661,37 @@
                 next = current === 'include' ? 'off' : 'include';
             } else if (ratio > 0.55) {
                 next = current === 'exclude' ? 'off' : 'exclude';
+            } else {
+                // Middle click: cycle state to make narrow buttons reliable.
+                if (current === 'off') next = 'include';
+                else if (current === 'include') next = 'exclude';
+                else next = 'off';
             }
             applyToggleState(button, next);
             persistFilters();
             if (dataTable) dataTable.ajax.reload();
         });
+    }
+
+    function getEditorFilterScope() {
+        const portalFilter = document.getElementById('portalFilter');
+        if (portalFilter) {
+            const card = portalFilter.closest('.filter-card');
+            if (card) return card;
+        }
+        const pageMeta = document.querySelector('#page-meta[data-page="editor"]');
+        if (pageMeta) {
+            const container = pageMeta.closest('.container-fluid');
+            if (container) {
+                const card = container.querySelector('.filter-card');
+                if (card) return card;
+            }
+        }
+        return document.querySelector('#app-content .filter-card') || document;
+    }
+
+    function getEditorToggleButtons() {
+        return getEditorFilterScope().querySelectorAll('.tri-toggle');
     }
 
     // Initialize Tom Select dropdowns
@@ -680,6 +714,14 @@
             }
         });
 
+        // Reset tri-toggle DOM nodes so stale click handlers from previous editor init
+        // (HTMX navigation) are removed before binding handlers in this init scope.
+        getEditorToggleButtons().forEach((button) => {
+            const clean = button.cloneNode(true);
+            clean.dataset.triBound = '0';
+            button.replaceWith(clean);
+        });
+
         // Portal filter with Tom Select
         portalSelect = new TomSelect('#portalFilter', {
             plugins: ['remove_button', 'clear_button'],
@@ -689,6 +731,7 @@
             hidePlaceholder: true,
             maxOptions: null,
             onChange: function() {
+                if (restoringFilters) return;
                 updateGroupFilter();
                 persistFilters();
                 if (dataTable) dataTable.ajax.reload();
@@ -713,6 +756,7 @@
                 }
             },
             onChange: function() {
+                if (restoringFilters) return;
                 persistFilters();
                 if (dataTable) dataTable.ajax.reload();
             }
@@ -726,6 +770,7 @@
             hidePlaceholder: true,
             maxOptions: null,
             onChange: function() {
+                if (restoringFilters) return;
                 persistFilters();
                 if (dataTable) dataTable.ajax.reload();
             }
@@ -739,14 +784,15 @@
             hidePlaceholder: true,
             maxOptions: null,
             onChange: function() {
+                if (restoringFilters) return;
                 persistFilters();
                 if (dataTable) dataTable.ajax.reload();
             }
         });
 
-        loadTagFilterValues();
+        restoringFilters = true;
 
-        document.querySelectorAll('.tri-toggle').forEach(button => {
+        getEditorToggleButtons().forEach(button => {
             bindTriToggle(button);
         });
 
@@ -761,13 +807,21 @@
             }, 300);
         };
 
-        // Populate the dropdowns
-        populateFilters();
+        // Populate dropdowns and restore saved filters once to avoid race conditions.
+        populateFilters()
+            .then(() => {
+                applyStoredSelects(false);
+            })
+            .finally(() => {
+                restoringFilters = false;
+                if (dataTable) dataTable.ajax.reload();
+            });
     }
 
     // Update group filter based on selected portals
     function updateGroupFilter() {
         const selectedPortals = portalSelect.getValue();
+        const selectedGroups = groupSelect ? groupSelect.getValue() : [];
 
         // Clear current options
         groupSelect.clear();
@@ -779,45 +833,69 @@
             filteredGroups = allGroupsData.filter(group => selectedPortals.includes(group.portal));
         }
 
-        // Re-add filtered groups
+        // Keep custom groups always pinned to top.
+        if (allCustomGroupsData.length > 0) {
+            groupSelect.addOptionGroup(CUSTOM_GROUP_OPTGROUP, { portal: CUSTOM_GROUP_LABEL });
+            allCustomGroupsData.forEach(genre => {
+                groupSelect.addOption({ value: genre, text: genre, portal: CUSTOM_GROUP_OPTGROUP });
+            });
+        }
+
+        // Re-add filtered portal groups
         filteredGroups.forEach(group => {
             groupSelect.addOptionGroup(group.portal, { portal: group.portal });
             group.genres.forEach(genre => {
                 groupSelect.addOption({ value: genre, text: genre, portal: group.portal });
             });
         });
+
+        if (selectedGroups && selectedGroups.length > 0) {
+            const validValues = selectedGroups.filter(value => groupSelect.options[value]);
+            if (validValues.length > 0) {
+                groupSelect.setValue(validValues, true);
+            }
+        }
     }
 
     // Populate filter dropdowns
     function populateFilters() {
-        // Populate portals dropdown
-        fetch('/editor/portals')
+        const portalsPromise = fetch('/editor/portals')
             .then(res => res.json())
             .then(data => {
-                data.portals.forEach(portal => {
+                (data.portals || []).forEach(portal => {
                     portalSelect.addOption({ value: portal, text: portal });
                 });
-                applyStoredSelects();
             })
             .catch(err => console.error('Error loading portals:', err));
 
-        // Populate groups dropdown (grouped by portal)
-        fetch('/editor/genres-grouped')
+        const groupsPromise = fetch('/editor/genres-grouped')
             .then(res => res.json())
             .then(data => {
                 // Store all groups data for dynamic filtering
-                allGroupsData = data.genres_by_portal;
+                allGroupsData = data.genres_by_portal || [];
+                allCustomGroupsData = data.custom_groups || [];
+
+                // Keep custom groups always pinned to top.
+                if (allCustomGroupsData.length > 0) {
+                    groupSelect.addOptionGroup(CUSTOM_GROUP_OPTGROUP, { portal: CUSTOM_GROUP_LABEL });
+                    allCustomGroupsData.forEach(genre => {
+                        groupSelect.addOption({ value: genre, text: genre, portal: CUSTOM_GROUP_OPTGROUP });
+                    });
+                }
 
                 // Add optgroups for each portal
-                data.genres_by_portal.forEach(group => {
+                allGroupsData.forEach(group => {
                     groupSelect.addOptionGroup(group.portal, { portal: group.portal });
-                    group.genres.forEach(genre => {
+                    (group.genres || []).forEach(genre => {
                         groupSelect.addOption({ value: genre, text: genre, portal: group.portal });
                     });
                 });
-                applyStoredSelects();
             })
             .catch(err => console.error('Error loading groups:', err));
+
+        const tagsPromise = loadTagFilterValues();
+
+        return Promise.all([portalsPromise, groupsPromise, tagsPromise]);
     }
 
     function renderToggleButtons(containerId, values, prefix) {
@@ -838,7 +916,7 @@
     }
 
     function loadTagFilterValues() {
-        fetch('/api/editor/tag-values')
+        return fetch('/api/editor/tag-values')
             .then(res => res.json())
             .then(data => {
                 renderToggleButtons('resolutionButtons', data.resolutions || [], 'resolution');
@@ -849,19 +927,18 @@
                     eventTagSelect.addOption({ value: value, text: value });
                 });
                 renderToggleButtons('miscButtons', data.misc_tags || [], 'misc');
-                applyStoredSelects();
             })
             .catch(err => console.error('Error loading tag values:', err));
     }
 
-    function applyStoredSelects() {
+    function applyStoredSelects(reloadTable = true) {
         const stored = loadStoredFilters();
         if (stored.portal && portalSelect) portalSelect.setValue(stored.portal, true);
         if (stored.group && groupSelect) groupSelect.setValue(stored.group, true);
         if (stored.country && countrySelect) countrySelect.setValue(stored.country, true);
         if (stored.eventTags && eventTagSelect) eventTagSelect.setValue(stored.eventTags, true);
         if (stored.toggles) {
-            document.querySelectorAll('.tri-toggle').forEach(button => {
+            getEditorToggleButtons().forEach(button => {
                 const key = button.dataset.key;
                 applyToggleState(button, stored.toggles[key] || 'off');
             });
@@ -870,7 +947,7 @@
             const input = document.getElementById('searchFilter');
             if (input) input.value = stored.search;
         }
-        if (dataTable) {
+        if (reloadTable && dataTable) {
             dataTable.ajax.reload();
         }
     }
@@ -878,7 +955,7 @@
     function persistFilters() {
         const existing = loadStoredFilters();
         const toggles = { ...(existing.toggles || {}) };
-        document.querySelectorAll('.tri-toggle').forEach(button => {
+        getEditorToggleButtons().forEach(button => {
             toggles[button.dataset.key] = button.dataset.state || 'off';
         });
         saveStoredFilters({
@@ -1020,10 +1097,14 @@
                     const miscInclude = [];
                     const miscExclude = [];
                     let hevcState = 'off';
-                    document.querySelectorAll('.tri-toggle').forEach(button => {
+                    getEditorToggleButtons().forEach(button => {
                         const key = button.dataset.key;
                         const state = button.dataset.state || 'off';
-                        toggles[key] = state;
+                        // In rare HTMX re-init races, duplicate buttons with the same key can exist briefly.
+                        // Prefer a non-off state so user clicks are not overwritten by stale hidden controls.
+                        if (!(key in toggles) || toggles[key] === 'off') {
+                            toggles[key] = state;
+                        }
                         if (key === 'hevc') {
                             hevcState = state;
                         } else if (key && key.startsWith('resolution:')) {
@@ -1309,7 +1390,7 @@
         if (stored.search) {
             dataTable.search(stored.search).draw();
         }
-        applyStoredSelects();
+        applyStoredSelects(false);
         applyCountryColors();
         applyGroupSwitchStates();
     });

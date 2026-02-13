@@ -144,6 +144,23 @@ def create_events_blueprint(
     def _resolve_espn_names(sport_key, league_key):
         sport_name = sport_key
         league_name = league_key
+        conn = get_db_connection()
+        try:
+            sport_row = conn.execute(
+                "SELECT sport_name FROM espn_sports_cache WHERE sport_key = ?",
+                (sport_key,),
+            ).fetchone()
+            if sport_row and sport_row["sport_name"]:
+                sport_name = sport_row["sport_name"]
+            league_row = conn.execute(
+                "SELECT league_name FROM espn_leagues_cache WHERE league_key = ?",
+                (league_key,),
+            ).fetchone()
+            if league_row and league_row["league_name"]:
+                league_name = league_row["league_name"]
+                return sport_name, league_name
+        finally:
+            conn.close()
         for sport in ESPN_CATALOG:
             if sport.get("key") == sport_key:
                 sport_name = sport.get("name") or sport_key
@@ -207,7 +224,7 @@ def create_events_blueprint(
 
     def _cleanup_expired_event_channels(cursor):
         now_ts = time.time()
-        rows = cursor.execute(
+        expired_rows = cursor.execute(
             """
             SELECT portal_id, channel_id
             FROM event_generated_channels
@@ -215,9 +232,25 @@ def create_events_blueprint(
             """,
             (now_ts,),
         ).fetchall()
-        if not rows:
+        orphan_rows = cursor.execute(
+            """
+            SELECT eg.portal_id, eg.channel_id
+            FROM event_generated_channels eg
+            LEFT JOIN channels c
+              ON c.portal_id = eg.portal_id
+             AND c.channel_id = eg.channel_id
+            WHERE c.channel_id IS NULL
+            """
+        ).fetchall()
+        to_delete = {
+            (row["portal_id"], row["channel_id"]) for row in expired_rows
+        }
+        to_delete.update(
+            (row["portal_id"], row["channel_id"]) for row in orphan_rows
+        )
+        if not to_delete:
             return 0
-        to_delete = [(row["portal_id"], row["channel_id"]) for row in rows]
+        to_delete = list(to_delete)
         cursor.executemany(
             "DELETE FROM channels WHERE portal_id = ? AND channel_id = ?",
             to_delete,
@@ -249,6 +282,7 @@ def create_events_blueprint(
             "output_template": (payload.get("output_template") or "{home} vs {away} | {date} {time}").strip(),
             "output_group_name": (payload.get("output_group_name") or "EVENTS").strip(),
             "channel_number_start": int(payload.get("channel_number_start", 10000) or 10000),
+            "auto_create_channels": 1 if payload.get("auto_create_channels", False) else 0,
             "priority": int(payload.get("priority", 100) or 100),
         }
 
@@ -370,6 +404,12 @@ def create_events_blueprint(
             return True
         return (time.time() - float(updated_at)) > ttl_seconds
 
+    def _sport_name_for_key(sport_key):
+        for sport in ESPN_CATALOG:
+            if sport.get("key") == sport_key:
+                return sport.get("name") or sport_key
+        return str(sport_key or "").strip() or "Sport"
+
     def _refresh_espn_catalog(force=False):
         cfg = _espn_config()
         if not cfg["enabled"]:
@@ -387,10 +427,27 @@ def create_events_blueprint(
             if not should_refresh:
                 return {"ok": True, "refreshed": False}
 
-            for sport in ESPN_CATALOG:
-                sport_key = sport["key"]
-                if cfg["sports"] and sport_key not in cfg["sports"]:
-                    continue
+            if cfg["sports"]:
+                sport_keys = sorted(cfg["sports"])
+            else:
+                sport_keys = sorted({sport.get("key") for sport in ESPN_CATALOG if sport.get("key")})
+
+            catalog_by_sport = {
+                str(sport.get("key") or "").strip().lower(): sport
+                for sport in ESPN_CATALOG
+                if str(sport.get("key") or "").strip()
+            }
+
+            for sport_key in sport_keys:
+                sport_name = _sport_name_for_key(sport_key)
+                sport_catalog = catalog_by_sport.get(str(sport_key or "").strip().lower()) or {}
+                leagues = []
+                for league in sport_catalog.get("leagues") or []:
+                    league_key = str(league.get("key") or "").strip().lower()
+                    league_name = str(league.get("name") or "").strip()
+                    if not league_key or not league_name:
+                        continue
+                    leagues.append({"key": league_key, "name": league_name, "raw": league})
                 conn.execute(
                     """
                     INSERT INTO espn_sports_cache (sport_key, sport_name, updated_at, raw_json)
@@ -400,9 +457,14 @@ def create_events_blueprint(
                         updated_at = excluded.updated_at,
                         raw_json = excluded.raw_json
                     """,
-                    (sport_key, sport["name"], now, json.dumps(sport)),
+                    (sport_key, sport_name, now, json.dumps({"key": sport_key, "name": sport_name})),
                 )
-                for league in sport.get("leagues", []):
+                if leagues:
+                    conn.execute(
+                        "DELETE FROM espn_leagues_cache WHERE sport_key = ?",
+                        (sport_key,),
+                    )
+                for league in leagues:
                     conn.execute(
                         """
                         INSERT INTO espn_leagues_cache (league_key, league_name, sport_key, updated_at, raw_json)
@@ -418,7 +480,7 @@ def create_events_blueprint(
                             league["name"],
                             sport_key,
                             now,
-                            json.dumps(league),
+                            json.dumps(league.get("raw") or {"key": league["key"], "name": league["name"]}),
                         ),
                     )
             conn.commit()
@@ -867,6 +929,7 @@ def create_events_blueprint(
             "output_template": row["output_template"] or "",
             "output_group_name": row["output_group_name"] or "EVENTS",
             "channel_number_start": row["channel_number_start"] if row["channel_number_start"] is not None else 10000,
+            "auto_create_channels": bool(row["auto_create_channels"]) if "auto_create_channels" in row.keys() else False,
             "priority": row["priority"] if row["priority"] is not None else 100,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -1031,9 +1094,9 @@ def create_events_blueprint(
                 """
                 INSERT INTO event_rules
                 (name, enabled, provider, use_espn_events, espn_event_window_hours, sport, league_filters, team_filters, channel_groups, channel_regex,
-                 epg_pattern, extract_regex, output_template, output_group_name, channel_number_start,
+                 epg_pattern, extract_regex, output_template, output_group_name, channel_number_start, auto_create_channels,
                  priority, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     rule["name"],
@@ -1051,6 +1114,7 @@ def create_events_blueprint(
                     rule["output_template"],
                     rule["output_group_name"],
                     rule["channel_number_start"],
+                    rule["auto_create_channels"],
                     rule["priority"],
                     now,
                     now,
@@ -1076,7 +1140,7 @@ def create_events_blueprint(
                 UPDATE event_rules
                 SET name = ?, enabled = ?, provider = ?, use_espn_events = ?, espn_event_window_hours = ?, sport = ?, league_filters = ?, team_filters = ?,
                     channel_groups = ?, channel_regex = ?, epg_pattern = ?, extract_regex = ?,
-                    output_template = ?, output_group_name = ?, channel_number_start = ?,
+                    output_template = ?, output_group_name = ?, channel_number_start = ?, auto_create_channels = ?,
                     priority = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -1096,6 +1160,7 @@ def create_events_blueprint(
                     rule["output_template"],
                     rule["output_group_name"],
                     rule["channel_number_start"],
+                    rule["auto_create_channels"],
                     rule["priority"],
                     now,
                     rule_id,
@@ -1483,6 +1548,7 @@ def create_events_blueprint(
         payload = request.get_json(silent=True) or {}
         provider = _normalize_provider(payload.get("provider") or "sportsdb")
         use_espn_events = bool(payload.get("use_espn_events")) and provider == "espn"
+        auto_create_channels = bool(payload.get("auto_create_channels"))
         try:
             espn_window_hours = int(payload.get("espn_event_window_hours", 72) or 72)
         except (TypeError, ValueError):
@@ -1934,12 +2000,17 @@ def create_events_blueprint(
                 if event_ids:
                     conn = get_db_connection()
                     try:
+                        cursor = conn.cursor()
                         placeholders = ",".join(["?"] * len(event_ids))
-                        rows = conn.execute(
+                        rows = cursor.execute(
                             f"""
-                            SELECT event_id, portal_id, channel_id, source_portal_id, source_channel_id
-                            FROM event_generated_channels
-                            WHERE event_id IN ({placeholders})
+                            SELECT eg.event_id, eg.portal_id, eg.channel_id, eg.source_portal_id, eg.source_channel_id
+                            FROM event_generated_channels eg
+                            JOIN channels c
+                              ON c.portal_id = eg.portal_id
+                             AND c.channel_id = eg.channel_id
+                            WHERE eg.event_id IN ({placeholders})
+                              AND COALESCE(c.is_event, 0) = 1
                             """,
                             event_ids,
                         ).fetchall()
@@ -1953,6 +2024,60 @@ def create_events_blueprint(
                                 "portal_id": row["portal_id"],
                                 "channel_id": row["channel_id"],
                             }
+                        if auto_create_channels:
+                            output_group = (payload.get("output_group_name") or "EVENTS").strip()
+                            output_template = (payload.get("output_template") or "{home} vs {away} | {date} {time}").strip()
+                            rule_id = payload.get("rule_id")
+                            try:
+                                channel_number_start = int(payload.get("channel_number_start", 10000) or 10000)
+                            except (TypeError, ValueError):
+                                channel_number_start = 10000
+
+                            for ev in espn_events:
+                                event_id = str(ev.get("event_id") or "").strip()
+                                if not event_id:
+                                    continue
+                                start_raw = ev["start_dt"].isoformat() if ev.get("start_dt") else ""
+                                for channel_key in sorted(espn_match_channels.get(event_id, set())):
+                                    channel = channel_lookup.get(channel_key)
+                                    if not channel:
+                                        continue
+                                    created_key = (
+                                        event_id,
+                                        str(channel["portal_id"] or ""),
+                                        str(channel["channel_id"] or ""),
+                                    )
+                                    if created_key in created_map:
+                                        continue
+                                    try:
+                                        created = _create_event_channel_internal(
+                                            cursor,
+                                            portal_id=channel["portal_id"],
+                                            source_channel_id=channel["channel_id"],
+                                            event_id=event_id,
+                                            rule_id=rule_id,
+                                            home=ev.get("home") or "",
+                                            away=ev.get("away") or "",
+                                            sport=ev.get("sport") or "",
+                                            league=ev.get("league") or "",
+                                            start_raw=start_raw,
+                                            output_group=output_group,
+                                            output_template=output_template,
+                                            channel_number_start=channel_number_start,
+                                        )
+                                        created_map[created_key] = {
+                                            "portal_id": channel["portal_id"],
+                                            "channel_id": created["channel_id"],
+                                        }
+                                    except Exception as exc:
+                                        logger.warning(
+                                            "Auto-create event channel failed (event=%s portal=%s channel=%s): %s",
+                                            event_id,
+                                            channel.get("portal_id"),
+                                            channel.get("channel_id"),
+                                            exc,
+                                        )
+                            conn.commit()
                     finally:
                         conn.close()
             for ev in espn_events:
@@ -2082,6 +2207,192 @@ def create_events_blueprint(
             }
         )
 
+    def _create_event_channel_internal(
+        cursor,
+        *,
+        portal_id,
+        source_channel_id,
+        event_id,
+        rule_id,
+        home,
+        away,
+        sport,
+        league,
+        start_raw,
+        output_group,
+        output_template,
+        channel_number_start,
+    ):
+        if not portal_id or not source_channel_id or not event_id:
+            raise ValueError("portal_id, channel_id, event_id required")
+        if not home and not away:
+            raise ValueError("event name missing")
+        start_dt = None
+        if start_raw:
+            try:
+                start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).astimezone()
+            except Exception:
+                start_dt = None
+
+        safe_channel_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", f"event-{event_id}-{source_channel_id}").strip("-")
+        alias_map = _build_alias_abbrev_map(cursor)
+        event_name, output_group = _apply_event_template(
+            output_template,
+            output_group,
+            {
+                "home": home,
+                "away": away,
+                "sport": sport,
+                "league": league,
+                "start": start_raw,
+            },
+            alias_map,
+        )
+        if not event_name or event_name.strip().lower() in {"vs", "vs |", "|"}:
+            event_name = f"Event {event_id}".strip()
+        _cleanup_expired_event_channels(cursor)
+        cursor.execute(
+            "SELECT * FROM channels WHERE portal_id = ? AND channel_id = ?",
+            (portal_id, source_channel_id),
+        )
+        source = cursor.fetchone()
+        if not source:
+            raise LookupError("source channel not found")
+
+        used_rows = cursor.execute(
+            """
+            SELECT custom_number
+            FROM channels
+            WHERE portal_id = ?
+              AND is_event = 1
+              AND custom_genre = ?
+              AND custom_number != ''
+            """,
+            (portal_id, output_group),
+        ).fetchall()
+        used_numbers = set()
+        for row in used_rows:
+            try:
+                used_numbers.add(int(row["custom_number"]))
+            except (TypeError, ValueError):
+                continue
+        next_num = channel_number_start
+        while next_num in used_numbers:
+            next_num += 1
+
+        expires_at = (start_dt + timedelta(hours=24)).timestamp() if start_dt else time.time() + 24 * 3600
+
+        event_tags = _split_tags(source["event_tags"])
+        misc_tags = _split_tags(source["misc_tags"])
+
+        cursor.execute(
+            """
+            INSERT INTO channels (
+                portal_id, channel_id, portal_name, name, number, genre, genre_id, logo,
+                custom_name, custom_number, custom_genre, custom_epg_id, enabled, auto_name, display_name,
+                resolution, video_codec, country, event_tags, misc_tags,
+                matched_name, matched_source, matched_station_id, matched_call_sign, matched_logo, matched_score,
+                is_header, is_event, is_raw, available_macs, alternate_ids, cmd, channel_hash
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(portal_id, channel_id) DO UPDATE SET
+                name = excluded.name,
+                display_name = excluded.display_name,
+                custom_name = excluded.custom_name,
+                custom_number = excluded.custom_number,
+                custom_genre = excluded.custom_genre,
+                genre = excluded.genre,
+                logo = excluded.logo,
+                enabled = excluded.enabled,
+                is_event = excluded.is_event,
+                event_tags = excluded.event_tags,
+                misc_tags = excluded.misc_tags,
+                cmd = excluded.cmd,
+                available_macs = excluded.available_macs,
+                alternate_ids = excluded.alternate_ids
+            """,
+            (
+                portal_id,
+                safe_channel_id,
+                source["portal_name"],
+                event_name,
+                source["number"],
+                output_group,
+                source["genre_id"],
+                source["logo"],
+                event_name,
+                str(next_num),
+                output_group,
+                "",
+                1,
+                event_name,
+                event_name,
+                source["resolution"],
+                source["video_codec"],
+                source["country"],
+                source["event_tags"] or "",
+                source["misc_tags"] or "",
+                source["matched_name"],
+                source["matched_source"],
+                source["matched_station_id"],
+                source["matched_call_sign"],
+                source["matched_logo"],
+                source["matched_score"],
+                0,
+                1,
+                0,
+                source["available_macs"],
+                source["alternate_ids"],
+                source["cmd"],
+                "",
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO event_generated_channels (
+                portal_id, channel_id, event_id, rule_id,
+                source_portal_id, source_channel_id,
+                event_home, event_away, event_start, event_sport, event_league,
+                created_at, expires_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(portal_id, channel_id) DO UPDATE SET
+                event_id = excluded.event_id,
+                rule_id = excluded.rule_id,
+                source_portal_id = excluded.source_portal_id,
+                source_channel_id = excluded.source_channel_id,
+                event_home = excluded.event_home,
+                event_away = excluded.event_away,
+                event_start = excluded.event_start,
+                event_sport = excluded.event_sport,
+                event_league = excluded.event_league,
+                created_at = excluded.created_at,
+                expires_at = excluded.expires_at
+            """,
+            (
+                portal_id,
+                safe_channel_id,
+                event_id,
+                rule_id,
+                portal_id,
+                source_channel_id,
+                home,
+                away,
+                start_raw,
+                sport,
+                league,
+                time.time(),
+                expires_at,
+            ),
+        )
+        _sync_channel_tags(cursor, portal_id, safe_channel_id, event_tags, misc_tags)
+        return {"channel_id": safe_channel_id, "name": event_name}
+
     @bp.route("/api/events/create_channel", methods=["POST"])
     @authorise
     def create_event_channel():
@@ -2102,195 +2413,33 @@ def create_events_blueprint(
         except (TypeError, ValueError):
             channel_number_start = 10000
 
-        if not portal_id or not source_channel_id or not event_id:
-            return jsonify({"ok": False, "error": "portal_id, channel_id, event_id required"}), 400
-        if not home and not away:
-            return jsonify({"ok": False, "error": "event name missing"}), 400
-
-        start_dt = None
-        if start_raw:
-            try:
-                start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).astimezone()
-            except Exception:
-                start_dt = None
-
-        safe_channel_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", f"event-{event_id}-{source_channel_id}").strip("-")
-
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            alias_map = _build_alias_abbrev_map(cursor)
-            event_name, output_group = _apply_event_template(
-                output_template,
-                output_group,
-                {
-                    "home": home,
-                    "away": away,
-                    "sport": sport,
-                    "league": league,
-                    "start": start_raw,
-                },
-                alias_map,
-            )
-            if not event_name or event_name.strip().lower() in {"vs", "vs |", "|"}:
-                event_name = f"Event {event_id}".strip()
-            _cleanup_expired_event_channels(cursor)
-            cursor.execute(
-                "SELECT * FROM channels WHERE portal_id = ? AND channel_id = ?",
-                (portal_id, source_channel_id),
-            )
-            source = cursor.fetchone()
-            if not source:
-                return jsonify({"ok": False, "error": "source channel not found"}), 404
-
-            cursor.execute(
-                """
-                SELECT MAX(CAST(custom_number AS INTEGER)) AS max_num
-                FROM channels
-                WHERE portal_id = ?
-                  AND is_event = 1
-                  AND custom_number != ''
-                  AND CAST(custom_number AS INTEGER) >= ?
-                """,
-                (portal_id, channel_number_start),
-            )
-            used_rows = cursor.execute(
-                """
-                SELECT custom_number
-                FROM channels
-                WHERE portal_id = ?
-                  AND is_event = 1
-                  AND custom_genre = ?
-                  AND custom_number != ''
-                """,
-                (portal_id, output_group),
-            ).fetchall()
-            used_numbers = set()
-            for row in used_rows:
-                try:
-                    used_numbers.add(int(row["custom_number"]))
-                except (TypeError, ValueError):
-                    continue
-            next_num = channel_number_start
-            while next_num in used_numbers:
-                next_num += 1
-
-            expires_at = (start_dt + timedelta(hours=24)).timestamp() if start_dt else time.time() + 24 * 3600
-
-            event_tags = _split_tags(source["event_tags"])
-            misc_tags = _split_tags(source["misc_tags"])
-
-            cursor.execute(
-                """
-                INSERT INTO channels (
-                    portal_id, channel_id, portal_name, name, number, genre, genre_id, logo,
-                    custom_name, custom_number, custom_genre, custom_epg_id, enabled, auto_name, display_name,
-                    resolution, video_codec, country, event_tags, misc_tags,
-                    matched_name, matched_source, matched_station_id, matched_call_sign, matched_logo, matched_score,
-                    is_header, is_event, is_raw, available_macs, alternate_ids, cmd, channel_hash
-                ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?
+            try:
+                result = _create_event_channel_internal(
+                    cursor,
+                    portal_id=portal_id,
+                    source_channel_id=source_channel_id,
+                    event_id=event_id,
+                    rule_id=rule_id,
+                    home=home,
+                    away=away,
+                    sport=sport,
+                    league=league,
+                    start_raw=start_raw,
+                    output_group=output_group,
+                    output_template=output_template,
+                    channel_number_start=channel_number_start,
                 )
-                ON CONFLICT(portal_id, channel_id) DO UPDATE SET
-                    name = excluded.name,
-                    display_name = excluded.display_name,
-                    custom_name = excluded.custom_name,
-                    custom_number = excluded.custom_number,
-                    custom_genre = excluded.custom_genre,
-                    genre = excluded.genre,
-                    logo = excluded.logo,
-                    enabled = excluded.enabled,
-                    is_event = excluded.is_event,
-                    event_tags = excluded.event_tags,
-                    misc_tags = excluded.misc_tags,
-                    cmd = excluded.cmd,
-                    available_macs = excluded.available_macs,
-                    alternate_ids = excluded.alternate_ids
-                """,
-                (
-                    portal_id,
-                    safe_channel_id,
-                    source["portal_name"],
-                    event_name,
-                    source["number"],
-                    output_group,
-                    source["genre_id"],
-                    source["logo"],
-                    event_name,
-                    str(next_num),
-                    output_group,
-                    "",
-                    1,
-                    event_name,
-                    event_name,
-                    source["resolution"],
-                    source["video_codec"],
-                    source["country"],
-                    source["event_tags"] or "",
-                    source["misc_tags"] or "",
-                    source["matched_name"],
-                    source["matched_source"],
-                    source["matched_station_id"],
-                    source["matched_call_sign"],
-                    source["matched_logo"],
-                    source["matched_score"],
-                    0,
-                    1,
-                    0,
-                    source["available_macs"],
-                    source["alternate_ids"],
-                    source["cmd"],
-                    "",
-                ),
-            )
-            cursor.execute(
-                """
-                INSERT INTO event_generated_channels (
-                    portal_id, channel_id, event_id, rule_id,
-                    source_portal_id, source_channel_id,
-                    event_home, event_away, event_start, event_sport, event_league,
-                    created_at, expires_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(portal_id, channel_id) DO UPDATE SET
-                    event_id = excluded.event_id,
-                    rule_id = excluded.rule_id,
-                    source_portal_id = excluded.source_portal_id,
-                    source_channel_id = excluded.source_channel_id,
-                    event_home = excluded.event_home,
-                    event_away = excluded.event_away,
-                    event_start = excluded.event_start,
-                    event_sport = excluded.event_sport,
-                    event_league = excluded.event_league,
-                    created_at = excluded.created_at,
-                    expires_at = excluded.expires_at
-                """,
-                (
-                    portal_id,
-                    safe_channel_id,
-                    event_id,
-                    rule_id,
-                    portal_id,
-                    source_channel_id,
-                    home,
-                    away,
-                    start_raw,
-                    sport,
-                    league,
-                    time.time(),
-                    expires_at,
-                ),
-            )
-            _sync_channel_tags(cursor, portal_id, safe_channel_id, event_tags, misc_tags)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            except LookupError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 404
             conn.commit()
+            return jsonify({"ok": True, "channel_id": result["channel_id"], "name": result["name"]})
         finally:
             conn.close()
-
-        return jsonify({"ok": True, "channel_id": safe_channel_id, "name": event_name})
 
     @bp.route("/api/events/delete_channel", methods=["POST"])
     @authorise

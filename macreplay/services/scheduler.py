@@ -163,3 +163,36 @@ def start_event_channel_cleanup_scheduler(*, getSettings, logger):
 
     threading.Thread(target=cleanup_loop, daemon=True).start()
     logger.info("Event channel cleanup scheduler started!")
+
+
+def start_event_auto_create_scheduler(*, getSettings, logger, run_auto_create):
+    """Start scheduler that auto-creates event channels for enabled rules."""
+
+    def auto_create_loop():
+        while True:
+            try:
+                interval_min = float(
+                    getSettings().get("events auto create interval minutes", 0) or 0
+                )
+                if interval_min <= 0:
+                    time.sleep(3600)
+                    continue
+
+                logger.info(
+                    "Event auto-create scheduler: next run in %s minute(s)",
+                    interval_min,
+                )
+                time.sleep(max(30, int(interval_min * 60)))
+                result = run_auto_create() or {}
+                logger.info(
+                    "Event auto-create scheduler: done (rules=%s, ok=%s, failed=%s).",
+                    result.get("rules", 0),
+                    result.get("ok", 0),
+                    result.get("failed", 0),
+                )
+            except Exception as exc:
+                logger.error("Event auto-create scheduler error: %s", exc)
+                time.sleep(300)
+
+    threading.Thread(target=auto_create_loop, daemon=True).start()
+    logger.info("Event auto-create scheduler started!")

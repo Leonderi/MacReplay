@@ -16,7 +16,7 @@ function setPortalType(type) {
         btn.classList.toggle('active', btn.dataset.portalType === type);
     });
 
-    document.querySelectorAll('.portal-card[data-portal-type], .portal-list-item[data-portal-type]').forEach(el => {
+    document.querySelectorAll('.portal-list-item[data-portal-type]').forEach(el => {
         el.style.display = (el.dataset.portalType === type) ? '' : 'none';
     });
 
@@ -33,28 +33,6 @@ document.querySelectorAll('.portal-type-tab').forEach(btn => {
     btn.addEventListener('click', () => setPortalType(btn.dataset.portalType));
 });
 setPortalType(currentPortalType);
-
-// View toggle
-function setView(view) {
-    const cardView = document.getElementById('cardView');
-    const listView = document.getElementById('listView');
-    const cardBtn = document.getElementById('cardViewBtn');
-    const listBtn = document.getElementById('listViewBtn');
-
-    if (view === 'card') {
-        cardView.classList.add('active');
-        listView.classList.remove('active');
-        cardBtn.classList.add('active');
-        listBtn.classList.remove('active');
-    } else {
-        cardView.classList.remove('active');
-        listView.classList.add('active');
-        cardBtn.classList.remove('active');
-        listBtn.classList.add('active');
-    }
-
-    localStorage.setItem('portalsView', view);
-}
 
 // Toggle portal expand/collapse (list view)
 function togglePortal(portalId) {
@@ -121,8 +99,16 @@ function editXtreamPortal(portalId) {
     document.getElementById('edit_xtream_name').value = portal.name;
     document.getElementById('edit_xtream_portal_code').value = portal["portal code"] || "";
     document.getElementById('edit_xtream_url').value = portal.url;
-    document.getElementById('edit_xtream_username').value = portal["xtream username"] || "";
-    document.getElementById('edit_xtream_password').value = portal["xtream password"] || "";
+    const xtreamLogins = Array.isArray(portal["xtream logins"]) ? portal["xtream logins"] : [];
+    const loginLines = xtreamLogins
+        .filter(item => item && item.username && item.password)
+        .map(item => `${item.username}:${item.password}`);
+    if (loginLines.length === 0 && portal["xtream username"] && portal["xtream password"]) {
+        loginLines.push(`${portal["xtream username"]}:${portal["xtream password"]}`);
+    }
+    document.getElementById('edit_xtream_credentials').value = loginLines.join('\n');
+    document.getElementById('edit_xtream_user_agent').value = portal["xtream user agent"] || "";
+    document.getElementById('edit_xtream_user_agent_preset').value = "";
     document.getElementById('edit_xtream_proxy').value = portal.proxy || '';
     document.getElementById('edit_xtream_fetch_epg').checked = toBool(portal['fetch epg'], true);
     document.getElementById('edit_xtream_auto_normalize').checked = toBool(portal['auto normalize names'], false);
@@ -559,21 +545,6 @@ function updatePortalExpiryIndicators() {
     });
 }
 
-// Event delegation for portal actions
-document.addEventListener('click', function(e) {
-    const btn = e.target.closest('[data-action]');
-    if (!btn) return;
-
-    const action = btn.dataset.action;
-    const portalId = btn.dataset.portalId;
-
-    if (action === 'edit') {
-        editPortal(portalId);
-    } else if (action === 'delete') {
-        deletePortal(portalId, btn.dataset.portalName);
-    }
-});
-
 async function updatePortalFlag(portalId, flag, value) {
     const response = await fetch('/api/portal/flag', {
         method: 'POST',
@@ -631,6 +602,14 @@ document.addEventListener('change', async function(e) {
 // ===== Genre Tile Helper =====
 function toggleGenreTile(tile) {
     tile.classList.toggle('selected');
+}
+
+function applyXtreamUserAgentPreset(inputId, presetSelectId) {
+    const input = document.getElementById(inputId);
+    const preset = document.getElementById(presetSelectId);
+    if (!input || !preset) return;
+    if (!preset.value) return;
+    input.value = preset.value;
 }
 
 // ========== Channel Refresh Function ==========
@@ -720,32 +699,6 @@ function pollRefreshStatus(portalId) {
 }
 
 function updatePortalStats(portalId, stats) {
-    // Update card view stats
-    const cardItem = document.querySelector(`.portal-card[data-portal-id="${portalId}"]`);
-    if (cardItem) {
-        // Update channels display
-        const channelCol = cardItem.querySelector('.card-stat-channels');
-        if (channelCol) {
-            if (stats.total_channels > 0 && stats.total_channels !== stats.channels) {
-                channelCol.innerHTML = `<strong><i class="fas fa-tv"></i> Channels:</strong>
-                    <span class="text-primary">${stats.channels}</span> / ${stats.total_channels}`;
-            } else {
-                channelCol.innerHTML = `<strong><i class="fas fa-tv"></i> Channels:</strong> ${stats.channels}`;
-            }
-        }
-
-        // Update groups display
-        const groupCol = cardItem.querySelector('.card-stat-groups');
-        if (groupCol) {
-            if (stats.total_groups > 0 && stats.total_groups !== stats.groups) {
-                groupCol.innerHTML = `<strong><i class="fas fa-folder"></i> Groups:</strong>
-                    <span class="text-primary">${stats.groups}</span> / ${stats.total_groups}`;
-            } else {
-                groupCol.innerHTML = `<strong><i class="fas fa-folder"></i> Groups:</strong> ${stats.groups}`;
-            }
-        }
-    }
-
     // Update list view stats
     const listItem = document.querySelector(`.portal-list-item[data-portal-id="${portalId}"]`);
     if (listItem) {
@@ -840,13 +793,19 @@ async function openGenreModal(portalId) {
     try {
         let response;
         if ((portal.type || 'stalker') === 'xtream') {
+            const logins = Array.isArray(portal['xtream logins']) ? portal['xtream logins'] : [];
+            let login = logins.find(item => item && item.username && item.password) || null;
+            if (!login && portal['xtream username'] && portal['xtream password']) {
+                login = { username: portal['xtream username'], password: portal['xtream password'] };
+            }
             response = await fetch('/api/portal/xtream/categories/list', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     url: portal.url,
-                    username: portal['xtream username'] || '',
-                    password: portal['xtream password'] || '',
+                    username: login ? login.username : '',
+                    password: login ? login.password : '',
+                    user_agent: portal['xtream user agent'] || '',
                     proxy: portal.proxy || ''
                 })
             });
@@ -891,6 +850,69 @@ async function openGenreModal(portalId) {
         document.getElementById('genreModalErrorMessage').textContent = 'Error fetching groups: ' + error;
         document.getElementById('genreModalError').style.display = 'block';
     }
+}
+
+async function refreshXtreamLogins(portalId) {
+    const btn = event.target.closest('button');
+    const originalContent = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+    }
+
+    try {
+        const response = await fetch('/api/portal/xtream/logins/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ portal_id: portalId })
+        });
+        const data = await response.json();
+        if (data.success) {
+            if (portalsData[portalId]) {
+                portalsData[portalId]['xtream logins'] = data.logins || [];
+            }
+            updateXtreamLoginsTable(portalId, data.logins || []);
+            showToast(data.message || 'Xtream logins refreshed', 'success');
+        } else {
+            showToast('Error: ' + (data.message || 'Failed to refresh Xtream logins'), 'error');
+        }
+    } catch (error) {
+        console.error('Error refreshing Xtream logins:', error);
+        showToast('Error refreshing Xtream login data', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalContent;
+        }
+    }
+}
+
+function updateXtreamLoginsTable(portalId, logins) {
+    const portalItem = document.querySelector(`.portal-list-item[data-portal-id="${portalId}"]`);
+    if (!portalItem) return;
+    const tbody = portalItem.querySelector('.xtream-login-table tbody');
+    if (!tbody) return;
+
+    tbody.innerHTML = (logins || []).map(login => {
+        const username = login.username || '';
+        const status = login.status || '-';
+        const expires = login.expires_iso || '-';
+        const daysLeft = (login.days_left === null || login.days_left === undefined) ? '-' : login.days_left;
+        const daysClass = (login.days_left !== null && login.days_left !== undefined && login.days_left <= 7)
+            ? 'status-expiring-soon'
+            : ((login.days_left !== null && login.days_left !== undefined) ? 'status-valid' : '');
+        const active = Number.isFinite(Number(login.active_cons)) ? Number(login.active_cons) : 0;
+        const max = Number.isFinite(Number(login.max_connections)) ? Number(login.max_connections) : 0;
+        return `
+            <tr data-xtream-user="${username}">
+                <td class="mac-address">${username}</td>
+                <td>${status}</td>
+                <td>${expires}</td>
+                <td class="${daysClass}">${daysLeft}</td>
+                <td>${active} / ${max}</td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function renderGenreModalTiles(genres, selectedGenres) {
@@ -1095,10 +1117,6 @@ document.getElementById('genreModal')?.addEventListener('hidden.bs.modal', funct
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
-    // Load saved view preference
-    const savedView = localStorage.getItem('portalsView') || 'card';
-    setView(savedView);
-
     // Sort MACs by expiration date (earliest first)
     sortMacTablesByExpiry();
 
@@ -1113,7 +1131,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
         // expose functions used by inline handlers
-        window.setView = setView;
         window.togglePortal = togglePortal;
         window.editPortal = editPortal;
         window.refreshPortalChannels = refreshPortalChannels;
@@ -1122,12 +1139,14 @@ document.addEventListener('DOMContentLoaded', function() {
         window.deleteMac = deleteMac;
         window.confirmMacDelete = confirmMacDelete;
         window.openGenreModal = openGenreModal;
+        window.refreshXtreamLogins = refreshXtreamLogins;
         window.savePortalGenres = savePortalGenres;
         window.selectAllModalGenres = selectAllModalGenres;
         window.deselectAllModalGenres = deselectAllModalGenres;
         window.applyDefaultGroupSelection = applyDefaultGroupSelection;
         window.toggleGenreTile = toggleGenreTile;
         window.updateGenreModalStats = updateGenreModalStats;
+        window.applyXtreamUserAgentPreset = applyXtreamUserAgentPreset;
 
     }
     window.App && window.App.register('portals', initPortalsPage);

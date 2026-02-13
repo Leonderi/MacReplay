@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import os
 import shutil
 import time
@@ -48,6 +49,7 @@ from macreplay.blueprints.hdhr import create_hdhr_blueprint
 from macreplay.blueprints.playlist import create_playlist_blueprint
 from macreplay.blueprints.streaming import create_streaming_blueprint
 from macreplay.blueprints.events import create_events_blueprint
+from macreplay.blueprints.xtream_api import create_xtream_api_blueprint
 from macreplay.services.jobs import JobManager
 from macreplay.logging_setup import setup_logging
 from macreplay.bootstrap import build_runtime_state, start_runtime
@@ -58,6 +60,7 @@ from macreplay.services.scheduler import (
     start_vacuum_epg_scheduler,
     start_custom_epg_scheduler,
     start_event_channel_cleanup_scheduler,
+    start_event_auto_create_scheduler,
 )
 logger = setup_logging(LOG_DIR)
 
@@ -1738,6 +1741,23 @@ def normalize_event_label(pattern):
     return label
 
 
+def extract_country_from_group_name(group_name):
+    """Extract 2-letter country code from beginning of group name."""
+    if not group_name:
+        return ""
+    text = str(group_name).strip()
+    # Allowed forms:
+    # DE| Sports, DE - Sports, (DE) Sports, [DE] Sports, DE Sports
+    match = re.match(
+        r"^\s*(?:\((?P<a>[A-Za-z]{2})\)|\[(?P<b>[A-Za-z]{2})\]|(?P<c>[A-Za-z]{2}))(?:(?:\s*[\|\-_:\/]\s*)|\s+|$)",
+        text,
+    )
+    if not match:
+        return ""
+    code = match.group("a") or match.group("b") or match.group("c") or ""
+    return code.upper()
+
+
 def normalize_match_name(value):
     folded = ascii_fold(value).upper()
     folded = re.sub(r"[^A-Z0-9]+", " ", folded)
@@ -1896,30 +1916,54 @@ def load_channelsdvr_records_for_country(country, db_path, include_lineup_channe
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.execute("PRAGMA busy_timeout = 5000;")
     cursor = conn.cursor()
+    fetch_all = country in ("", "ALL", "__ALL__", "*")
     if include_lineup_channels:
-        query = """
-            SELECT DISTINCT s.station_id, s.name, s.call_sign, s.logo_uri
-            FROM stations s
-            JOIN station_lineups sl ON sl.station_id = s.station_id
-            JOIN lineup_markets lm ON lm.lineup_id = sl.lineup_id
-            WHERE lm.country = ?
-            UNION
-            SELECT DISTINCT lc.station_id, lc.station_name, lc.call_sign, s.logo_uri
-            FROM lineup_channels lc
-            JOIN lineup_markets lm ON lm.lineup_id = lc.lineup_id
-            LEFT JOIN stations s ON s.station_id = lc.station_id
-            WHERE lm.country = ?
-        """
-        cursor.execute(query, (country, country))
+        if fetch_all:
+            query = """
+                SELECT DISTINCT s.station_id, s.name, s.call_sign, s.logo_uri
+                FROM stations s
+                JOIN station_lineups sl ON sl.station_id = s.station_id
+                JOIN lineup_markets lm ON lm.lineup_id = sl.lineup_id
+                UNION
+                SELECT DISTINCT lc.station_id, lc.station_name, lc.call_sign, s.logo_uri
+                FROM lineup_channels lc
+                JOIN lineup_markets lm ON lm.lineup_id = lc.lineup_id
+                LEFT JOIN stations s ON s.station_id = lc.station_id
+            """
+            cursor.execute(query)
+        else:
+            query = """
+                SELECT DISTINCT s.station_id, s.name, s.call_sign, s.logo_uri
+                FROM stations s
+                JOIN station_lineups sl ON sl.station_id = s.station_id
+                JOIN lineup_markets lm ON lm.lineup_id = sl.lineup_id
+                WHERE lm.country = ?
+                UNION
+                SELECT DISTINCT lc.station_id, lc.station_name, lc.call_sign, s.logo_uri
+                FROM lineup_channels lc
+                JOIN lineup_markets lm ON lm.lineup_id = lc.lineup_id
+                LEFT JOIN stations s ON s.station_id = lc.station_id
+                WHERE lm.country = ?
+            """
+            cursor.execute(query, (country, country))
     else:
-        query = """
-            SELECT DISTINCT s.station_id, s.name, s.call_sign, s.logo_uri
-            FROM stations s
-            JOIN station_lineups sl ON sl.station_id = s.station_id
-            JOIN lineup_markets lm ON lm.lineup_id = sl.lineup_id
-            WHERE lm.country = ?
-        """
-        cursor.execute(query, (country,))
+        if fetch_all:
+            query = """
+                SELECT DISTINCT s.station_id, s.name, s.call_sign, s.logo_uri
+                FROM stations s
+                JOIN station_lineups sl ON sl.station_id = s.station_id
+                JOIN lineup_markets lm ON lm.lineup_id = sl.lineup_id
+            """
+            cursor.execute(query)
+        else:
+            query = """
+                SELECT DISTINCT s.station_id, s.name, s.call_sign, s.logo_uri
+                FROM stations s
+                JOIN station_lineups sl ON sl.station_id = s.station_id
+                JOIN lineup_markets lm ON lm.lineup_id = sl.lineup_id
+                WHERE lm.country = ?
+            """
+            cursor.execute(query, (country,))
     records = [
         {
             "station_id": row[0],
@@ -2000,13 +2044,17 @@ def match_channelsdvr_name(raw_name, country, settings):
     if not norm:
         return {}
 
-    country_iso3 = normalize_market_country(country)
-    norm_tokens = [t for t in norm.split() if t not in {country.upper(), country_iso3}]
+    lookup_country = country
+    country_iso3 = normalize_market_country(lookup_country)
+    tokens_to_strip = {country.upper()}
+    if country_iso3:
+        tokens_to_strip.add(country_iso3)
+    norm_tokens = [t for t in norm.split() if t not in tokens_to_strip]
     norm = " ".join(norm_tokens).strip()
     if not norm:
         return {}
 
-    cache_entry = get_channelsdvr_cache_for_country(country, db_path, include_lineup_channels)
+    cache_entry = get_channelsdvr_cache_for_country(lookup_country, db_path, include_lineup_channels)
     exact = cache_entry["exact"]
     if norm in exact:
         if settings.get("channelsdvr debug", False):
@@ -2068,13 +2116,17 @@ def suggest_channelsdvr_matches(raw_name, country, settings, limit=8):
     if not norm:
         return []
 
-    country_iso3 = normalize_market_country(country)
-    norm_tokens = [t for t in norm.split() if t not in {country.upper(), country_iso3}]
+    lookup_country = country
+    country_iso3 = normalize_market_country(lookup_country)
+    tokens_to_strip = {country.upper()}
+    if country_iso3:
+        tokens_to_strip.add(country_iso3)
+    norm_tokens = [t for t in norm.split() if t not in tokens_to_strip]
     norm = " ".join(norm_tokens).strip()
     if not norm:
         return []
 
-    cache_entry = get_channelsdvr_cache_for_country(country, db_path, include_lineup_channels)
+    cache_entry = get_channelsdvr_cache_for_country(lookup_country, db_path, include_lineup_channels)
     exact = cache_entry["exact"]
     results = []
 
@@ -2185,7 +2237,7 @@ def run_portal_matching(portal_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(f"""
-        SELECT c.channel_id, c.name, c.country, c.is_header
+        SELECT c.channel_id, c.name, c.country, c.genre, c.custom_genre, c.is_header
         FROM channels c
         LEFT JOIN groups g ON c.portal_id = g.portal_id AND c.genre_id = g.genre_id
         WHERE c.portal_id = ? AND {ACTIVE_GROUP_CONDITION}
@@ -2197,13 +2249,28 @@ def run_portal_matching(portal_id):
         if row['is_header'] == 1:
             continue
         raw_name = row['name'] or ''
-        if not raw_name or not row['country']:
+        country = (row['country'] or "").strip().upper()
+        if not country:
+            group_name = (row["custom_genre"] or row["genre"] or "").strip()
+            country = extract_country_from_group_name(group_name)
+        if not raw_name or not country:
             continue
         tag_info = extract_channel_tags(raw_name, tag_config, settings, allow_match=True)
+        if not tag_info.get("country"):
+            tag_info["country"] = country
+            fallback_match = match_channelsdvr_name(raw_name, country, settings)
+            if fallback_match:
+                tag_info["matched_name"] = fallback_match.get("name", "")
+                tag_info["matched_source"] = "channelsdvr"
+                tag_info["matched_station_id"] = fallback_match.get("station_id", "")
+                tag_info["matched_call_sign"] = fallback_match.get("call_sign", "")
+                tag_info["matched_logo"] = fallback_match.get("logo_uri", "")
+                tag_info["matched_score"] = fallback_match.get("score", "")
         cursor.execute("""
             UPDATE channels
             SET matched_name = ?, matched_source = ?, matched_station_id = ?,
                 matched_call_sign = ?, matched_logo = ?, matched_score = ?,
+                country = ?,
                 display_name = COALESCE(NULLIF(custom_name, ''), NULLIF(?, ''), NULLIF(auto_name, ''), name)
             WHERE portal_id = ? AND channel_id = ?
         """, (
@@ -2213,6 +2280,7 @@ def run_portal_matching(portal_id):
             tag_info.get("matched_call_sign", ""),
             tag_info.get("matched_logo", ""),
             tag_info.get("matched_score", ""),
+            tag_info.get("country", country),
             tag_info.get("matched_name", ""),
             portal_id,
             row['channel_id']
@@ -2706,7 +2774,7 @@ class HLSStreamManager:
             del self.streams[stream_key]
             logger.info(f"✓ {stream_type.capitalize()} stream {stream_key} stopped and cleaned up")
     
-    def start_stream(self, portal_id, channel_id, stream_url, proxy=None):
+    def start_stream(self, portal_id, channel_id, stream_url, proxy=None, user_agent=None):
         """Start or reuse an HLS stream for a channel."""
         stream_key = f"{portal_id}_{channel_id}"
         
@@ -2803,6 +2871,8 @@ class HLSStreamManager:
             # Add proxy if provided
             if proxy:
                 ffmpeg_cmd.extend(["-http_proxy", proxy])
+            if user_agent:
+                ffmpeg_cmd.extend(["-user_agent", user_agent])
             
             # Add timeout
             ffmpeg_cmd.extend(["-timeout", str(timeout)])
@@ -2992,15 +3062,29 @@ def fetch_xtream_channels(portal_id, portal):
     portal_name = portal["name"]
     url = portal["url"]
     proxy = portal.get("proxy", "")
-    username = portal.get("xtream username", "")
-    password = portal.get("xtream password", "")
+    logins = portal.get("xtream logins") if isinstance(portal.get("xtream logins"), list) else []
+    username = ""
+    password = ""
+    for login in logins:
+        if not isinstance(login, dict):
+            continue
+        username = str(login.get("username") or "").strip()
+        password = str(login.get("password") or "").strip()
+        if username and password:
+            break
+    if not username or not password:
+        username = portal.get("xtream username", "")
+        password = portal.get("xtream password", "")
+    user_agent = portal.get("xtream user agent", "")
 
     logger.info(f"Fetching Xtream channels for portal: {portal_name}")
 
     channels_by_id = {}
     all_genres = {}
 
-    categories = xtream.get_live_categories(url, username, password, proxy) or []
+    categories = xtream.get_live_categories(
+        url, username, password, proxy, user_agent=user_agent
+    ) or []
     for cat in categories:
         if not isinstance(cat, dict):
             continue
@@ -3009,7 +3093,9 @@ def fetch_xtream_channels(portal_id, portal):
         if cat_id:
             all_genres[cat_id] = cat_name
 
-    streams = xtream.get_live_streams(url, username, password, proxy) or []
+    streams = xtream.get_live_streams(
+        url, username, password, proxy, user_agent=user_agent
+    ) or []
     logger.info(f"Xtream portal returned {len(streams)} streams")
 
     for stream in streams:
@@ -3182,7 +3268,14 @@ def refresh_channels_cache(target_portal_id=None):
             logger.debug(f"Could not load active genres for portal {portal_name}: {e}")
 
         existing_hashes = {}
-        cursor.execute("SELECT channel_id, channel_hash FROM channels WHERE portal_id = ?", (portal_id,))
+        cursor.execute(
+            """
+            SELECT channel_id, channel_hash
+            FROM channels
+            WHERE portal_id = ? AND COALESCE(is_event, 0) = 0
+            """,
+            (portal_id,),
+        )
         for row in cursor.fetchall():
             existing_hashes[row["channel_id"]] = row["channel_hash"] or ""
 
@@ -3265,7 +3358,7 @@ def refresh_channels_cache(target_portal_id=None):
                 auto_name = tag_info["clean_name"] if portal_auto_normalize and tag_info["clean_name"] else ""
                 resolution = tag_info["resolution"]
                 video_codec = tag_info["video_codec"]
-                country = tag_info["country"]
+                country = tag_info["country"] or extract_country_from_group_name(genre)
                 event_tags = tag_info["event_tags"]
                 misc_tags = tag_info["misc_tags"]
                 event_tags_list = tag_info.get("event_tags_list", [])
@@ -3713,11 +3806,30 @@ def refresh_xmltv_for_portal(portal_id):
 
     epg = None
     if portal_type == "xtream":
-        username = portal.get("xtream username", "")
-        password = portal.get("xtream password", "")
+        logins = portal.get("xtream logins") if isinstance(portal.get("xtream logins"), list) else []
+        username = ""
+        password = ""
+        for login in logins:
+            if not isinstance(login, dict):
+                continue
+            username = str(login.get("username") or "").strip()
+            password = str(login.get("password") or "").strip()
+            if username and password:
+                break
+        if not username or not password:
+            username = portal.get("xtream username", "")
+            password = portal.get("xtream password", "")
+        user_agent = portal.get("xtream user agent", "")
         if fetch_epg:
             stream_ids = [row["channel_id"] for row in enabled_rows if row.get("channel_id")]
-            epg = xtream.get_simple_epg_map(url, username, password, stream_ids, proxy)
+            epg = xtream.get_simple_epg_map(
+                url,
+                username,
+                password,
+                stream_ids,
+                proxy,
+                user_agent=user_agent,
+            )
             if epg:
                 logger.info("Successfully fetched Xtream EPG for portal %s", portal_name)
             else:
@@ -3919,7 +4031,128 @@ app.register_blueprint(
         effective_epg_name=effective_epg_name,
     )
 )
+app.register_blueprint(
+    create_xtream_api_blueprint(
+        logger=logger,
+        getSettings=getSettings,
+        get_db_connection=get_db_connection,
+        ACTIVE_GROUP_CONDITION=ACTIVE_GROUP_CONDITION,
+    )
+)
 
+
+
+def _pick_scheduler_auth(settings):
+    if not bool(settings.get("enable security")):
+        return {}
+
+    users = settings.get("access users", [])
+    if isinstance(users, list):
+        for entry in users:
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("enabled", True):
+                continue
+            if not entry.get("web", False) or not entry.get("admin", False):
+                continue
+            username = str(entry.get("username", "") or "").strip()
+            password = str(entry.get("password", "") or "").strip()
+            if username and password:
+                token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+                return {"Authorization": f"Basic {token}"}
+    legacy_user = str(settings.get("username", "") or "").strip()
+    legacy_pass = str(settings.get("password", "") or "").strip()
+    if legacy_user and legacy_pass:
+        token = base64.b64encode(f"{legacy_user}:{legacy_pass}".encode("utf-8")).decode("ascii")
+        return {"Authorization": f"Basic {token}"}
+    return {}
+
+
+def run_event_auto_create_tick():
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, provider, use_espn_events, espn_event_window_hours, sport,
+                   league_filters, channel_groups, channel_regex, epg_pattern, extract_regex,
+                   output_group_name, channel_number_start, output_template
+            FROM event_rules
+            WHERE enabled = 1 AND auto_create_channels = 1
+            ORDER BY priority ASC, id ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {"rules": 0, "ok": 0, "failed": 0}
+
+    settings = getSettings()
+    headers = {"Content-Type": "application/json"}
+    headers.update(_pick_scheduler_auth(settings))
+
+    ok_count = 0
+    fail_count = 0
+    with app.test_client() as client:
+        for row in rows:
+            try:
+                league_filters = []
+                channel_groups = []
+                if row["league_filters"]:
+                    try:
+                        parsed = json.loads(row["league_filters"])
+                        if isinstance(parsed, list):
+                            league_filters = parsed
+                    except Exception:
+                        league_filters = []
+                if row["channel_groups"]:
+                    try:
+                        parsed = json.loads(row["channel_groups"])
+                        if isinstance(parsed, list):
+                            channel_groups = parsed
+                    except Exception:
+                        channel_groups = []
+
+                payload = {
+                    "rule_id": row["id"],
+                    "provider": row["provider"] or "espn",
+                    "use_espn_events": bool(row["use_espn_events"]),
+                    "espn_event_window_hours": row["espn_event_window_hours"] or 72,
+                    "sport": row["sport"] or "",
+                    "league_filters": league_filters,
+                    "groups": channel_groups,
+                    "channel_regex": row["channel_regex"] or "",
+                    "epg_pattern": row["epg_pattern"] or "",
+                    "extract_regex": row["extract_regex"] or "",
+                    "output_group_name": row["output_group_name"] or "EVENTS",
+                    "channel_number_start": row["channel_number_start"] or 10000,
+                    "output_template": row["output_template"] or "{home} vs {away} | {date} {time}",
+                    "auto_create_channels": True,
+                }
+
+                resp = client.post(
+                    "/api/events/preview/programmes",
+                    json=payload,
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    data = resp.get_json(silent=True) or {}
+                    if data.get("ok"):
+                        ok_count += 1
+                        continue
+                fail_count += 1
+                body = resp.get_json(silent=True) or {}
+                logger.warning(
+                    "Event auto-create tick: rule %s failed (status=%s, error=%s)",
+                    row["id"],
+                    resp.status_code,
+                    body.get("error") or "unknown",
+                )
+            except Exception as exc:
+                fail_count += 1
+                logger.warning("Event auto-create tick: rule %s exception: %s", row["id"], exc)
+
+    return {"rules": len(rows), "ok": ok_count, "failed": fail_count}
 
 
 def start_refresh():
@@ -3969,6 +4202,11 @@ def start_refresh():
     start_vacuum_epg_scheduler(getSettings=getSettings, logger=logger)
     start_custom_epg_scheduler(refresh_custom_sources=refresh_custom_sources, logger=logger)
     start_event_channel_cleanup_scheduler(getSettings=getSettings, logger=logger)
+    start_event_auto_create_scheduler(
+        getSettings=getSettings,
+        logger=logger,
+        run_auto_create=run_event_auto_create_tick,
+    )
 
 
 if __name__ == "__main__":

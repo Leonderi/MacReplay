@@ -24,14 +24,6 @@
                         <i class="fas fa-key"></i> Xtream
                     </button>
                 </div>
-                <div class="btn-group view-toggle" role="group">
-                    <button type="button" class="btn btn-outline-secondary" id="cardViewBtn" onclick="setView('card')" title="Card View">
-                        <i class="fas fa-th-large"></i>
-                    </button>
-                    <button type="button" class="btn btn-outline-secondary" id="listViewBtn" onclick="setView('list')" title="List View">
-                        <i class="fas fa-list"></i>
-                    </button>
-                </div>
                 <button class="btn btn-primary" id="addPortalBtnStalker" data-bs-toggle="modal" data-bs-target="#addPortalModal">
                     <i class="fas fa-plus"></i> Add Portal
                 </button>
@@ -44,91 +36,6 @@
 </div>
 
 {% if portals %}
-<!-- Card View -->
-<div class="portal-card-view" id="cardView">
-    <div class="row">
-        {% for portal_id, portal in portals.items() %}
-        <div class="col-md-6 col-lg-4 mb-4">
-            <div class="card h-100 portal-card" data-portal-id="{{ portal_id }}" data-portal-type="{{ portal.get('type', 'stalker') }}">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">{{ portal.name or 'Unnamed Portal' }}</h5>
-                    <div class="d-flex align-items-center gap-1 portal-flag-buttons" onclick="event.stopPropagation()">
-                        <input type="checkbox" class="btn-check portal-flag-input" id="card_enabled_{{ portal_id }}" data-portal-id="{{ portal_id }}" data-flag="enabled" {% if portal.get('enabled', True) %}checked{% endif %} autocomplete="off">
-                        <label class="btn btn-outline-primary btn-sm" for="card_enabled_{{ portal_id }}" title="Portal enabled">Aktiv</label>
-
-                        <input type="checkbox" class="btn-check portal-flag-input" id="card_epg_{{ portal_id }}" data-portal-id="{{ portal_id }}" data-flag="fetch_epg" {% if portal.get('fetch epg', True) %}checked{% endif %} autocomplete="off">
-                        <label class="btn btn-outline-primary btn-sm" for="card_epg_{{ portal_id }}" title="EPG fetching">EPG</label>
-
-                        <input type="checkbox" class="btn-check portal-flag-input" id="card_match_{{ portal_id }}" data-portal-id="{{ portal_id }}" data-flag="auto_match" {% if portal.get('auto match', False) %}checked{% endif %} autocomplete="off">
-                        <label class="btn btn-outline-primary btn-sm" for="card_match_{{ portal_id }}" title="Auto match">Match</label>
-                    </div>
-                </div>
-                <div class="card-body">
-                    <p class="card-text">
-                        <strong>URL:</strong><br>
-                        <small class="text-muted">{{ portal.url[:50] }}{% if portal.url|length > 50 %}...{% endif %}</small>
-                    </p>
-                    <div class="row mb-2">
-                        <div class="col-6 card-stat-channels">
-                            <strong><i class="fas fa-tv"></i> Channels:</strong>
-                            {% set total_ch = portal_stats.get(portal_id, {}).get('total_channels', 0) %}
-                            {% set selected_ch = portal_stats.get(portal_id, {}).get('channels', 0) %}
-                            {% if total_ch > 0 and total_ch != selected_ch %}
-                                <span class="text-primary">{{ selected_ch }}</span> / {{ total_ch }}
-                            {% else %}
-                                {{ selected_ch }}
-                            {% endif %}
-                        </div>
-                        <div class="col-6 card-stat-groups">
-                            <strong><i class="fas fa-folder"></i> Groups:</strong>
-                            {% set active_groups = portal_stats.get(portal_id, {}).get('groups', 0) %}
-                            {% set total_groups = portal_stats.get(portal_id, {}).get('total_groups', 0) %}
-                            {% if total_groups > 0 and total_groups != active_groups %}
-                                <span class="text-primary">{{ active_groups }}</span> / {{ total_groups }}
-                            {% else %}
-                                {{ active_groups }}
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% if portal.get('type', 'stalker') == 'xtream' %}
-                    <p class="card-text">
-                        <strong>Username:</strong> {{ portal.get('xtream username', '') }}
-                    </p>
-                    {% else %}
-                    <p class="card-text">
-                        <strong>MAC Addresses:</strong> {{ portal.macs|length }}
-                    </p>
-                    {% endif %}
-                    <p class="card-text">
-                        <strong>Streams per MAC:</strong> {{ portal['streams per mac'] }}
-                    </p>
-                    <p class="card-text mb-0">
-                        <strong>EPG Offset:</strong> {{ portal['epg offset'] }} hours
-                    </p>
-                </div>
-                <div class="card-footer d-flex justify-content-between">
-                    <div>
-                        <button class="btn btn-sm btn-outline-primary" data-action="edit" data-portal-id="{{ portal_id }}">
-                            <i class="fas fa-edit"></i> Edit
-                        </button>
-                        <button class="btn btn-sm btn-outline-info" onclick="openGenreModal('{{ portal_id }}')">
-                            <i class="fas fa-folder"></i> Groups
-                        </button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="refreshPortalChannels('{{ portal_id }}')" title="Refresh Channels">
-                            <i class="fas fa-sync"></i>
-                        </button>
-                    </div>
-                    <button class="btn btn-sm btn-outline-danger" data-action="delete" data-portal-id="{{ portal_id }}" data-portal-name="{{ portal.name | e }}">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-
-<!-- List View -->
 <div class="portal-list-view" id="listView">
     <div class="portal-list">
         {% for portal_id, portal in portals.items() %}
@@ -156,7 +63,7 @@
                     {% else %}
                     <span class="portal-meta-item portal-stat-macs" title="User">
                         <i class="fas fa-user"></i>
-                        <span class="portal-meta-value">{{ portal.get('xtream username', '') }}</span>
+                        <span class="portal-meta-value">{{ (portal.get('xtream logins', []) or [])|length }}</span>
                     </span>
                     {% endif %}
                     <span class="portal-meta-item portal-stat-expiry" title="Days until next MAC expires" data-portal-id="{{ portal_id }}">
@@ -290,6 +197,48 @@
                     <p>No MAC addresses configured</p>
                 </div>
                 {% endif %}
+                {% elif portal.get('type', 'stalker') == 'xtream' %}
+                {% set xtream_logins = portal.get('xtream logins', []) or [] %}
+                <div class="mac-section-header d-flex justify-content-between align-items-center">
+                    <span class="mac-section-title">
+                        <i class="fas fa-users"></i> Xtream Logins ({{ xtream_logins|length }})
+                    </span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="refreshXtreamLogins('{{ portal_id }}')" title="Refresh Xtream account data">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+
+                {% if xtream_logins %}
+                <table class="mac-table xtream-login-table">
+                    <thead>
+                        <tr>
+                            <th>Username</th>
+                            <th>Status</th>
+                            <th>Expires</th>
+                            <th style="width: 90px;">Days Left</th>
+                            <th style="width: 130px;">Used / Max</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for login in xtream_logins %}
+                        <tr data-xtream-user="{{ login.get('username', '')|e }}">
+                            <td class="mac-address">{{ login.get('username', '') }}</td>
+                            <td>{{ login.get('status', '-') or '-' }}</td>
+                            <td>{{ login.get('expires_iso', '-') or '-' }}</td>
+                            <td class="{% if login.get('days_left') is not none and login.get('days_left') <= 7 %}status-expiring-soon{% elif login.get('days_left') is not none %}status-valid{% endif %}">
+                                {% if login.get('days_left') is not none %}{{ login.get('days_left') }}{% else %}-{% endif %}
+                            </td>
+                            <td>{{ login.get('active_cons', 0) }} / {{ login.get('max_connections', 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="no-macs">
+                    <i class="fas fa-user-slash fa-2x mb-2"></i>
+                    <p>No Xtream logins configured</p>
+                </div>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
@@ -395,14 +344,25 @@
                         <input type="url" class="form-control" id="add_xtream_url" name="url" placeholder="http://server:port" required>
                         <div class="form-text">Base URL without player_api.php</div>
                     </div>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <label for="add_xtream_username" class="form-label">Username</label>
-                            <input type="text" class="form-control" id="add_xtream_username" name="xtream_username" required>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="add_xtream_password" class="form-label">Password</label>
-                            <input type="password" class="form-control" id="add_xtream_password" name="xtream_password" required>
+                    <div class="mb-3">
+                        <label for="add_xtream_credentials" class="form-label">Logins (username:password)</label>
+                        <textarea class="form-control" id="add_xtream_credentials" name="xtream_credentials" rows="4" placeholder="user1:pass1&#10;user2:pass2" required></textarea>
+                        <div class="form-text">One login per line in format <code>username:password</code></div>
+                    </div>
+                    <div class="mb-3 mt-3">
+                        <label for="add_xtream_user_agent" class="form-label">User-Agent (Optional)</label>
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <select class="form-select" id="add_xtream_user_agent_preset" onchange="applyXtreamUserAgentPreset('add_xtream_user_agent','add_xtream_user_agent_preset')">
+                                    <option value="">Preset wählen</option>
+                                    <option value="TiviMate/5.1.6 (Android 12)">TiviMate</option>
+                                    <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.3">Chrome</option>
+                                    <option value="VLC/3.0.21 LibVLC/3.0.21">VLC</option>
+                                </select>
+                            </div>
+                            <div class="col-md-8">
+                                <input type="text" class="form-control" id="add_xtream_user_agent" name="xtream_user_agent" placeholder="Custom User-Agent">
+                            </div>
                         </div>
                     </div>
                     <div class="mb-3 mt-3">
@@ -544,14 +504,25 @@
                         <label for="edit_xtream_url" class="form-label">Server URL</label>
                         <input type="url" class="form-control" id="edit_xtream_url" name="url" required>
                     </div>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <label for="edit_xtream_username" class="form-label">Username</label>
-                            <input type="text" class="form-control" id="edit_xtream_username" name="xtream_username" required>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="edit_xtream_password" class="form-label">Password</label>
-                            <input type="password" class="form-control" id="edit_xtream_password" name="xtream_password" required>
+                    <div class="mb-3">
+                        <label for="edit_xtream_credentials" class="form-label">Logins (username:password)</label>
+                        <textarea class="form-control" id="edit_xtream_credentials" name="xtream_credentials" rows="4" required></textarea>
+                        <div class="form-text">One login per line in format <code>username:password</code></div>
+                    </div>
+                    <div class="mb-3 mt-3">
+                        <label for="edit_xtream_user_agent" class="form-label">User-Agent (Optional)</label>
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <select class="form-select" id="edit_xtream_user_agent_preset" onchange="applyXtreamUserAgentPreset('edit_xtream_user_agent','edit_xtream_user_agent_preset')">
+                                    <option value="">Preset wählen</option>
+                                    <option value="TiviMate/5.1.6 (Android 12)">TiviMate</option>
+                                    <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.3">Chrome</option>
+                                    <option value="VLC/3.0.21 LibVLC/3.0.21">VLC</option>
+                                </select>
+                            </div>
+                            <div class="col-md-8">
+                                <input type="text" class="form-control" id="edit_xtream_user_agent" name="xtream_user_agent" placeholder="Custom User-Agent">
+                            </div>
                         </div>
                     </div>
                     <div class="mb-3 mt-3">

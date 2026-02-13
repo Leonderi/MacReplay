@@ -9,6 +9,20 @@ from flask import Blueprint, jsonify, redirect, render_template, request, flash
 from ..security import authorise
 
 
+def _extract_country_from_group_name(group_name):
+    if not group_name:
+        return ""
+    text = str(group_name).strip()
+    match = re.match(
+        r"^\s*(?:\((?P<a>[A-Za-z]{2})\)|\[(?P<b>[A-Za-z]{2})\]|(?P<c>[A-Za-z]{2}))(?:(?:\s*[\|\-_:\/]\s*)|\s+|$)",
+        text,
+    )
+    if not match:
+        return ""
+    code = match.group("a") or match.group("b") or match.group("c") or ""
+    return code.upper()
+
+
 def create_editor_blueprint(
     *,
     logger,
@@ -722,7 +736,7 @@ def create_editor_blueprint(
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT name, custom_name, auto_name, display_name, country
+            SELECT name, custom_name, auto_name, display_name, country, genre, custom_genre
             FROM channels
             WHERE portal_id = ? AND channel_id = ?
             """,
@@ -736,7 +750,12 @@ def create_editor_blueprint(
 
         settings = getSettings()
         base_name = query or row["display_name"] or row["custom_name"] or row["auto_name"] or row["name"] or ""
-        country = row["country"] or ""
+        country = (row["country"] or "").strip().upper()
+        if not country:
+            group_name = (row["custom_genre"] or row["genre"] or "").strip()
+            country = _extract_country_from_group_name(group_name)
+        if not country:
+            return jsonify({"ok": True, "query": base_name, "results": []})
         results = suggest_channelsdvr_matches(base_name, country, settings)
         return jsonify({"ok": True, "query": base_name, "results": results})
 
@@ -827,25 +846,47 @@ def create_editor_blueprint(
             if portal:
                 cursor.execute(
                     """
-                    SELECT DISTINCT COALESCE(NULLIF(custom_genre, ''), genre) as genre
+                    SELECT
+                        COALESCE(NULLIF(custom_genre, ''), genre) as genre,
+                        MAX(
+                            CASE
+                                WHEN custom_genre IS NOT NULL
+                                     AND TRIM(custom_genre) != ''
+                                     AND custom_genre != 'None'
+                                THEN 1
+                                ELSE 0
+                            END
+                        ) as is_custom
                     FROM channels
                     WHERE COALESCE(NULLIF(custom_genre, ''), genre) IS NOT NULL
                         AND COALESCE(NULLIF(custom_genre, ''), genre) != ''
                         AND COALESCE(NULLIF(custom_genre, ''), genre) != 'None'
                         AND portal_id = ?
-                    ORDER BY genre
+                    GROUP BY COALESCE(NULLIF(custom_genre, ''), genre)
+                    ORDER BY is_custom DESC, genre COLLATE NOCASE
                     """,
                     (portal,),
                 )
             else:
                 cursor.execute(
                     """
-                    SELECT DISTINCT COALESCE(NULLIF(custom_genre, ''), genre) as genre
+                    SELECT
+                        COALESCE(NULLIF(custom_genre, ''), genre) as genre,
+                        MAX(
+                            CASE
+                                WHEN custom_genre IS NOT NULL
+                                     AND TRIM(custom_genre) != ''
+                                     AND custom_genre != 'None'
+                                THEN 1
+                                ELSE 0
+                            END
+                        ) as is_custom
                     FROM channels
                     WHERE COALESCE(NULLIF(custom_genre, ''), genre) IS NOT NULL
                         AND COALESCE(NULLIF(custom_genre, ''), genre) != ''
                         AND COALESCE(NULLIF(custom_genre, ''), genre) != 'None'
-                    ORDER BY genre
+                    GROUP BY COALESCE(NULLIF(custom_genre, ''), genre)
+                    ORDER BY is_custom DESC, genre COLLATE NOCASE
                     """
                 )
 
@@ -948,13 +989,29 @@ def create_editor_blueprint(
             for portal_name in portal_names:
                 cursor.execute(
                     """
-                    SELECT DISTINCT COALESCE(NULLIF(custom_genre, ''), genre) as genre
+                    SELECT
+                        COALESCE(NULLIF(custom_genre, ''), genre) as genre,
+                        MAX(
+                            CASE
+                                WHEN custom_genre IS NOT NULL
+                                     AND TRIM(custom_genre) != ''
+                                     AND custom_genre != 'None'
+                                THEN 1
+                                ELSE 0
+                            END
+                        ) as is_custom
                     FROM channels
                     WHERE portal_name = ?
+                        AND (
+                            custom_genre IS NULL
+                            OR TRIM(custom_genre) = ''
+                            OR custom_genre = 'None'
+                        )
                         AND COALESCE(NULLIF(custom_genre, ''), genre) IS NOT NULL
                         AND COALESCE(NULLIF(custom_genre, ''), genre) != ''
                         AND COALESCE(NULLIF(custom_genre, ''), genre) != 'None'
-                    ORDER BY genre
+                    GROUP BY COALESCE(NULLIF(custom_genre, ''), genre)
+                    ORDER BY is_custom DESC, genre COLLATE NOCASE
                     """,
                     (portal_name,),
                 )
@@ -965,14 +1022,26 @@ def create_editor_blueprint(
                 if genres:
                     genres_by_portal.append({"portal": portal_name, "genres": genres})
 
+            cursor.execute(
+                """
+                SELECT DISTINCT TRIM(custom_genre) as genre
+                FROM channels
+                WHERE custom_genre IS NOT NULL
+                    AND TRIM(custom_genre) != ''
+                    AND custom_genre != 'None'
+                ORDER BY genre COLLATE NOCASE
+                """
+            )
+            custom_groups = [row["genre"] for row in cursor.fetchall() if row["genre"]]
+
             conn.close()
 
-            payload = {"genres_by_portal": genres_by_portal}
+            payload = {"genres_by_portal": genres_by_portal, "custom_groups": custom_groups}
             filter_cache.set(cache_key, payload)
             return flask.jsonify(payload)
         except Exception as e:
             logger.error(f"Error in editor_genres_grouped: {e}")
-            return flask.jsonify({"genres_by_portal": [], "error": str(e)}), 500
+            return flask.jsonify({"genres_by_portal": [], "custom_groups": [], "error": str(e)}), 500
 
     @bp.route("/api/editor/duplicate-counts", methods=["GET"])
     @bp.route("/editor/duplicate-counts", methods=["GET"])

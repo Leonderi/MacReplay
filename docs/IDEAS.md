@@ -85,6 +85,7 @@ patterns = {
 - ⬜ Responsive Design für Mobile verbessern
 - ⬜ Tastatur-Shortcuts (z.B. `/` für Suche)
 - ⬜ Sortierung der Portale per Drag & Drop
+- ✅ Favicon im Browser-Tab
 - ✅ Settings neu strukturieren (Side-Nav + mehrere Seiten, klare Sektionen)
 - ⬜ Settings: Globale Portal-Defaults in Settings, Portal-Verwaltung bleibt in `/portals`
 - ✅ Kompakte Ansicht für Channel-Liste
@@ -193,6 +194,7 @@ Die Stalker Portal API liefert via `?type=stb&action=get_profile` zusätzliche I
 - ✅ Channels-Tabelle aufgeräumt (fallback_channel/audio_tags entfernt, Spalten gruppiert)
 
 ### Multi-User Support
+- 🔄 Access-Users mit Flags (enabled/web/admin/m3u/xc) in Settings
 - ⬜ Benutzerregistrierung und Login
 - ⬜ Rollen-System (Admin, Editor, Viewer)
 - ⬜ Portale bestimmten Benutzern zuweisen
@@ -280,15 +282,16 @@ Die Stalker Portal API liefert via `?type=stb&action=get_profile` zusätzliche I
   - Möglichkeit: Fuzzy-Matching für EPG-Zuordnung
 
 ### Event-Channels (EPG-basiert)
-- ⬜ Channels automatisch aus EPG-Einträgen generieren
-- ⬜ Mehrere Events pro Quell-Channel → mehrere Event-Channels
+- ✅ Channels automatisch aus EPG-Einträgen generieren
+- 🔄 Mehrere Events pro Quell-Channel → mehrere Event-Channels
 - ⬜ Kein EPG für Event-Channels nötig (Name = Info)
-- ⬜ Konfigurierbare Regeln (welche Channels, welche Event-Typen)
-- ⬜ Automatische Löschung nach Event-Ende
+- ✅ Konfigurierbare Regeln (welche Channels, welche Event-Typen)
+- ✅ Automatische Löschung nach Event-Ende
 
 ### Event-Channels (ESPN)
 - 🔄 ESPN-Provider: Sport/Liga-Auswahl, Upcoming-Events, Output-Template, Preview
 - 🔄 Matching von ESPN-Events gegen EPG (inkl. Zeitfenster)
+- ✅ Liga-Codes erweitert (u.a. `ger.2`, `ger.dfb_pokal`)
 
 **EPG-Muster Beispiele:**
 ```
@@ -370,30 +373,33 @@ EPG-Eintrag:      "Live BL: Werder Bremen - TSG Hoffenheim" @ 15:30
 
 ## Portal Types
 
-- ⬜ Xtream Codes Portale integrieren (zusätzlicher Portal-Typ neben Stalker/MAC)
-  - Login via `player_api.php`
-  - Kategorien/Streams/EPG mappen ins bestehende Schema
-  - UI um Xtream-Felder (Host/Username/Password) erweitern
-  - EPG-IDs und Channel-IDs sauber auflösen
+- ✅ Xtream Codes Portale integriert (zusätzlicher Portal-Typ neben Stalker/MAC)
+  - ✅ Login via `player_api.php`
+  - ✅ Kategorien/Streams/EPG ins bestehende Schema gemappt
+  - ✅ UI um Xtream-Felder erweitert (URL, mehrere Logins, User-Agent, Proxy)
+  - 🔄 Feinschliff bei Mapping/UX und Fehlerfällen
 
 ---
 
 ## Priorisierte Roadmap
 
 ### Phase 1 - Quick Wins
-1. Dashboard mit Übersicht
-2. Globale Suche
-3. MAC-Ablauf E-Mail-Benachrichtigungen
+1. ✅ Xtream Codes Basis integriert (inkl. Player API, mehrere Logins, User-Agent)
+2. ✅ Event-Channel Auto-Create + Cleanup Scheduler
+3. 🔄 Dashboard-Übersicht erweitern (weitere Widgets/Stats)
+4. 🔄 Editor/Filter Stabilität & Performance weiter verbessern
+5. ⬜ Globale Suche über Portale/MACs/Channels
 
 ### Phase 2 - Core Features
-4. Backup & Restore
-5. Multi-User Support (Basic)
-6. Webhook-Benachrichtigungen
+1. 🔄 Multi-User Support (Access-Flags vorhanden, Rollenmodell ausbauen)
+2. ⬜ Backup & Restore
+3. ⬜ Webhook-/Mail-Benachrichtigungen (EPG/Portal/MAC)
+4. ⬜ Settings-Suche + bessere Inline-Validierung
 
 ### Phase 3 - Advanced
-7. REST API
-8. Analytics Dashboard
-9. Aufnahme-Funktion
+1. ⬜ REST API + OpenAPI
+2. ⬜ Analytics Dashboard
+3. ⬜ Aufnahme-Funktion / DVR
 
 ---
 

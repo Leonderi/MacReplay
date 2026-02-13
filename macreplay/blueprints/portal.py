@@ -1,7 +1,7 @@
 import re
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, redirect, render_template, request, flash
 
@@ -29,11 +29,106 @@ def create_portal_blueprint(
 ):
     bp = Blueprint("portal", __name__)
 
+    def _parse_xtream_credentials(raw_credentials):
+        logins = []
+        seen = set()
+        for line in (raw_credentials or "").splitlines():
+            line = (line or "").strip()
+            if not line:
+                continue
+            if ":" not in line:
+                continue
+            username, password = line.split(":", 1)
+            username = username.strip()
+            password = password.strip()
+            if not username or not password:
+                continue
+            key = (username, password)
+            if key in seen:
+                continue
+            seen.add(key)
+            logins.append({"username": username, "password": password})
+        return logins
+
+    def _ensure_xtream_logins(portal):
+        raw = portal.get("xtream logins")
+        logins = []
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                username = str(item.get("username") or "").strip()
+                password = str(item.get("password") or "").strip()
+                if not username or not password:
+                    continue
+                normalized = dict(item)
+                normalized["username"] = username
+                normalized["password"] = password
+                logins.append(normalized)
+
+        if not logins:
+            legacy_user = str(portal.get("xtream username") or "").strip()
+            legacy_pass = str(portal.get("xtream password") or "").strip()
+            if legacy_user and legacy_pass:
+                logins = [{"username": legacy_user, "password": legacy_pass}]
+        return logins
+
+    def _hydrate_xtream_login_infos(url, proxy, user_agent, logins):
+        out = []
+        for login in logins:
+            username = str(login.get("username") or "").strip()
+            password = str(login.get("password") or "").strip()
+            if not username or not password:
+                continue
+            info = xtream.get_account_info(
+                url,
+                username,
+                password,
+                proxy=proxy,
+                user_agent=user_agent,
+            )
+            merged = dict(login)
+            merged["username"] = username
+            merged["password"] = password
+            if info:
+                merged["status"] = info.get("status") or merged.get("status", "")
+                merged["is_trial"] = info.get("is_trial")
+                merged["exp_timestamp"] = info.get("exp_timestamp")
+                merged["expires_iso"] = info.get("expires_iso") or ""
+                merged["days_left"] = info.get("days_left")
+                merged["active_cons"] = info.get("active_cons", 0)
+                merged["max_connections"] = info.get("max_connections", 0)
+                merged["created_at"] = info.get("created_at")
+                merged["server_timezone"] = info.get("server_timezone") or ""
+                merged["server_time_now"] = info.get("server_time_now") or ""
+            out.append(merged)
+        return out
+
+    def _sync_xtream_legacy_fields(portal):
+        logins = _ensure_xtream_logins(portal)
+        portal["xtream logins"] = logins
+        if logins:
+            portal["xtream username"] = logins[0].get("username", "")
+            portal["xtream password"] = logins[0].get("password", "")
+        else:
+            portal["xtream username"] = ""
+            portal["xtream password"] = ""
+        return logins
+
     @bp.route("/api/portals", methods=["GET"])
     @authorise
     def portals():
         """Legacy template route"""
         portal_data = getPortals()
+        changed = False
+        for portal in portal_data.values():
+            if portal.get("type", "stalker") == "xtream":
+                before = portal.get("xtream logins")
+                _sync_xtream_legacy_fields(portal)
+                if before != portal.get("xtream logins"):
+                    changed = True
+        if changed:
+            savePortals(portal_data)
 
         portal_stats = {}
         try:
@@ -140,11 +235,14 @@ def create_portal_blueprint(
         username = data.get("username")
         password = data.get("password")
         proxy = data.get("proxy") or ""
+        user_agent = data.get("user_agent") or ""
 
         if not url or not username or not password:
             return jsonify({"success": False, "message": "URL, username and password required"}), 400
 
-        categories = xtream.get_live_categories(url, username, password, proxy) or []
+        categories = xtream.get_live_categories(
+            url, username, password, proxy, user_agent=user_agent
+        ) or []
         genres = []
         for item in categories:
             if not isinstance(item, dict):
@@ -492,16 +590,30 @@ def create_portal_blueprint(
         if portalCode:
             portalCode = portalCode[:2]
         url = request.form["url"].strip().rstrip("/")
+        credentials_raw = request.form.get("xtream_credentials", "")
+        parsed_logins = _parse_xtream_credentials(credentials_raw)
         username = request.form.get("xtream_username", "").strip()
         password = request.form.get("xtream_password", "").strip()
+        if (not parsed_logins) and username and password:
+            parsed_logins = [{"username": username, "password": password}]
+        user_agent = request.form.get("xtream_user_agent", "").strip()
         proxy = request.form.get("proxy", "").strip()
         fetchEpg = "true" if request.form.get("fetch epg") else "false"
         autoNormalize = "true" if request.form.get("auto normalize names") else "false"
         autoMatch = "true" if request.form.get("auto match") else "false"
 
-        if not url or not username or not password:
-            flash("Xtream URL, username and password are required.", "danger")
+        if not url or not parsed_logins:
+            flash("Xtream URL and at least one login (username:password) are required.", "danger")
             return redirect("/portals", code=302)
+
+        hydrated_logins = _hydrate_xtream_login_infos(
+            url=url,
+            proxy=proxy,
+            user_agent=user_agent,
+            logins=parsed_logins,
+        )
+        if not hydrated_logins:
+            hydrated_logins = parsed_logins
 
         portal = {
             "type": "xtream",
@@ -510,8 +622,10 @@ def create_portal_blueprint(
             "portal code": portalCode,
             "url": url,
             "macs": {},
-            "xtream username": username,
-            "xtream password": password,
+            "xtream username": hydrated_logins[0].get("username", ""),
+            "xtream password": hydrated_logins[0].get("password", ""),
+            "xtream logins": hydrated_logins,
+            "xtream user agent": user_agent,
             "streams per mac": 1,
             "epg offset": 0,
             "proxy": proxy,
@@ -681,8 +795,13 @@ def create_portal_blueprint(
         if portalCode:
             portalCode = portalCode[:2]
         url = request.form["url"].strip().rstrip("/")
+        credentials_raw = request.form.get("xtream_credentials", "")
+        parsed_logins = _parse_xtream_credentials(credentials_raw)
         username = request.form.get("xtream_username", "").strip()
         password = request.form.get("xtream_password", "").strip()
+        if (not parsed_logins) and username and password:
+            parsed_logins = [{"username": username, "password": password}]
+        user_agent = request.form.get("xtream_user_agent", "").strip()
         proxy = request.form.get("proxy", "").strip()
         fetchEpg = "true" if request.form.get("fetch epg") else "false"
         autoNormalize = "true" if request.form.get("auto normalize names") else "false"
@@ -692,14 +811,28 @@ def create_portal_blueprint(
         if portal_id not in portals:
             flash("Portal not found.", "danger")
             return redirect("/portals", code=302)
+        if not parsed_logins:
+            flash("At least one Xtream login (username:password) is required.", "danger")
+            return redirect("/portals", code=302)
+
+        hydrated_logins = _hydrate_xtream_login_infos(
+            url=url,
+            proxy=proxy,
+            user_agent=user_agent,
+            logins=parsed_logins,
+        )
+        if not hydrated_logins:
+            hydrated_logins = parsed_logins
 
         portals[portal_id]["enabled"] = enabled
         portals[portal_id]["name"] = name
         portals[portal_id]["type"] = "xtream"
         portals[portal_id]["portal code"] = portalCode
         portals[portal_id]["url"] = url
-        portals[portal_id]["xtream username"] = username
-        portals[portal_id]["xtream password"] = password
+        portals[portal_id]["xtream logins"] = hydrated_logins
+        portals[portal_id]["xtream username"] = hydrated_logins[0].get("username", "")
+        portals[portal_id]["xtream password"] = hydrated_logins[0].get("password", "")
+        portals[portal_id]["xtream user agent"] = user_agent
         portals[portal_id]["proxy"] = proxy
         portals[portal_id]["fetch epg"] = fetchEpg
         portals[portal_id]["auto normalize names"] = autoNormalize
@@ -867,6 +1000,50 @@ def create_portal_blueprint(
             return jsonify({"success": True, "message": message, "macs": macsout})
         except Exception as e:
             logger.error(f"Error refreshing MACs: {e}")
+            return jsonify({"success": False, "message": str(e)}), 500
+
+    @bp.route("/api/portal/xtream/logins/refresh", methods=["POST"])
+    @authorise
+    def refresh_xtream_logins():
+        try:
+            data = request.get_json(silent=True) or {}
+            portal_id = data.get("portal_id")
+            if not portal_id:
+                return jsonify({"success": False, "message": "Portal ID required"}), 400
+
+            portals = getPortals()
+            portal = portals.get(portal_id)
+            if not portal:
+                return jsonify({"success": False, "message": "Portal not found"}), 404
+            if portal.get("type", "stalker") != "xtream":
+                return jsonify({"success": False, "message": "Only available for Xtream portals"}), 400
+
+            logins = _sync_xtream_legacy_fields(portal)
+            if not logins:
+                return jsonify({"success": False, "message": "No Xtream logins configured"}), 400
+
+            refreshed = _hydrate_xtream_login_infos(
+                url=portal.get("url", ""),
+                proxy=portal.get("proxy", ""),
+                user_agent=portal.get("xtream user agent", ""),
+                logins=logins,
+            )
+            if refreshed:
+                portal["xtream logins"] = refreshed
+                _sync_xtream_legacy_fields(portal)
+                savePortals(portals)
+                filter_cache.clear()
+
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Refreshed {len(refreshed or logins)} Xtream logins",
+                    "logins": refreshed or logins,
+                    "refreshed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error refreshing Xtream logins: {e}")
             return jsonify({"success": False, "message": str(e)}), 500
 
     return bp

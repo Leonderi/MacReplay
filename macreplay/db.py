@@ -262,6 +262,7 @@ def init_db(get_portals, logger):
             output_template TEXT DEFAULT '{home} vs {away} | {date} {time}',
             output_group_name TEXT DEFAULT 'EVENTS',
             channel_number_start INTEGER DEFAULT 10000,
+            auto_create_channels INTEGER DEFAULT 0,
             priority INTEGER DEFAULT 100,
             created_at TEXT,
             updated_at TEXT
@@ -280,6 +281,8 @@ def init_db(get_portals, logger):
         cursor.execute("ALTER TABLE event_rules ADD COLUMN output_group_name TEXT DEFAULT 'EVENTS'")
     if "channel_number_start" not in cols:
         cursor.execute("ALTER TABLE event_rules ADD COLUMN channel_number_start INTEGER DEFAULT 10000")
+    if "auto_create_channels" not in cols:
+        cursor.execute("ALTER TABLE event_rules ADD COLUMN auto_create_channels INTEGER DEFAULT 0")
 
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_event_rules_enabled
@@ -487,17 +490,33 @@ def cleanup_expired_event_channels():
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        rows = cursor.execute(
+        expired_rows = cursor.execute(
             """
             SELECT portal_id, channel_id
             FROM event_generated_channels
             WHERE expires_at IS NOT NULL AND expires_at <= strftime('%s','now')
             """
         ).fetchall()
-        if not rows:
+        orphan_rows = cursor.execute(
+            """
+            SELECT eg.portal_id, eg.channel_id
+            FROM event_generated_channels eg
+            LEFT JOIN channels c
+              ON c.portal_id = eg.portal_id
+             AND c.channel_id = eg.channel_id
+            WHERE c.channel_id IS NULL
+            """
+        ).fetchall()
+        keys = {
+            (row["portal_id"], row["channel_id"]) for row in expired_rows
+        }
+        keys.update(
+            (row["portal_id"], row["channel_id"]) for row in orphan_rows
+        )
+        if not keys:
             return 0
 
-        keys = [(row["portal_id"], row["channel_id"]) for row in rows]
+        keys = list(keys)
         cursor.executemany(
             "DELETE FROM channels WHERE portal_id = ? AND channel_id = ?",
             keys,

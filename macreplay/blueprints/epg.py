@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, Response, jsonify, render_template, request
 
-from ..security import authorise
+from ..security import authorise, authorise_m3u
 
 
 def create_epg_blueprint(
@@ -25,7 +25,7 @@ def create_epg_blueprint(
     bp = Blueprint("epg", __name__)
 
     @bp.route("/xmltv", methods=["GET"])
-    @authorise
+    @authorise_m3u
     def xmltv():
         logger.info("Guide Requested")
 

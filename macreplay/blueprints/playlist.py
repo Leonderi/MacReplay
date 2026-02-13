@@ -1,9 +1,10 @@
 import re
-from urllib.parse import urlparse
+import unicodedata
+from urllib.parse import quote, urlparse
 
 from flask import Blueprint, Response, request
 
-from ..security import authorise
+from ..security import authorise_m3u
 
 
 def create_playlist_blueprint(
@@ -70,6 +71,35 @@ def create_playlist_blueprint(
         text = str(value).strip().upper()
         return text
 
+    def _clean_text(value):
+        if value is None:
+            return ""
+        text = unicodedata.normalize("NFKC", str(value))
+        # Remove control chars that often break M3U parsers.
+        text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+        text = re.sub(r"[\x00-\x1f\x7f]", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def _escape_m3u_attr(value):
+        text = _clean_text(value)
+        return (
+            text.replace("&", "&amp;")
+            .replace('"', "&quot;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    def _normalize_group_title(value):
+        text = _clean_text(value)
+        if not text:
+            return "UNGROUPED"
+        # Normalize separators so group names collapse consistently in clients.
+        text = re.sub(r"\s*\|\s*", " | ", text)
+        text = re.sub(r"\s*-\s*", " - ", text)
+        text = re.sub(r"\s{2,}", " ", text).strip(" -|")
+        return text or "UNGROUPED"
+
     def _is_hevc(value):
         if not value:
             return False
@@ -110,6 +140,7 @@ def create_playlist_blueprint(
         logger.info("Generating playlist.m3u from database...")
 
         channels = []
+        seen_groups = set()
 
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -185,27 +216,50 @@ def create_playlist_blueprint(
 
             tvg_id = display_name if row["is_event"] else epg_id
             tvg_name = display_name
+            group_title = _normalize_group_title(genre or "")
+            if group_title not in seen_groups:
+                seen_groups.add(group_title)
+                dummy_name = _clean_text(f"::: {group_title} :::")
+                dummy_entry = (
+                    "#EXTINF:-1"
+                    + ' tvg-id="'
+                    + _escape_m3u_attr(f"dummy:{group_title}")
+                    + '"'
+                    + ' tvg-name="'
+                    + _escape_m3u_attr(dummy_name)
+                    + '"'
+                    + ' group-title="'
+                    + _escape_m3u_attr(group_title)
+                    + '",'
+                    + dummy_name
+                )
+                dummy_url = (
+                    f"{scheme}://{base_host}/playlist_dummy.m3u8"
+                    f"?group={quote(group_title, safe='')}"
+                )
+                channels.append(dummy_entry)
+                channels.append(dummy_url)
+
+            title_text = _clean_text(f"{channel_number} {display_name}".strip())
             channel_entry = (
                 "#EXTINF:-1"
                 + ' tvg-id="'
-                + tvg_id
+                + _escape_m3u_attr(tvg_id)
                 + '"'
                 + ' tvg-name="'
-                + tvg_name
+                + _escape_m3u_attr(tvg_name)
                 + '"'
                 + ' group-title="'
-                + (genre or "")
+                + _escape_m3u_attr(group_title)
                 + '",'
-                + channel_number
-                + " "
-                + display_name
+                + title_text
             )
 
             url = f"{scheme}://{base_host}/play/{portal}/{channel_id}?web=true"
 
             channels.append(channel_entry)
             if row["is_event"]:
-                channels.append(f"#EXTGRP:{genre or 'EVENTS'}")
+                channels.append(f"#EXTGRP:{group_title or 'EVENTS'}")
             channels.append(url)
 
         conn.close()
@@ -214,7 +268,7 @@ def create_playlist_blueprint(
         return playlist_content
 
     @bp.route("/playlist.m3u", methods=["GET"])
-    @authorise
+    @authorise_m3u
     def playlist():
         logger.info("Playlist Requested")
 
@@ -233,6 +287,23 @@ def create_playlist_blueprint(
         set_cached_playlist(cached_playlist)
 
         return Response(playlist_content, mimetype="text/plain")
+
+    @bp.route("/playlist_plus.m3u", methods=["GET"])
+    @authorise_m3u
+    def playlist_plus():
+        base_host, scheme = _determine_base_host()
+        current_host = _normalize_host(base_host) or host
+        playlist_content = generate_playlist(current_host, scheme)
+        return Response(playlist_content, mimetype="text/plain")
+
+    @bp.route("/playlist_dispatcharr.m3u", methods=["GET"])
+    def playlist_dispatcharr_removed():
+        return Response("Removed. Use /playlist.m3u or /playlist_plus.m3u", status=404)
+
+    @bp.route("/playlist_dummy.m3u8", methods=["GET"])
+    def playlist_dummy():
+        # Keepalive endpoint for synthetic per-group channels in M3U imports.
+        return Response(status=204)
 
     @bp.route("/update_playlistm3u", methods=["POST"])
     def update_playlistm3u():

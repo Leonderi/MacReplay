@@ -97,14 +97,21 @@
         return false;
     }
 
+    let htmxInitScheduled = false;
+
     function handleHtmxInit(evt) {
         const target = (evt && evt.detail && evt.detail.target) || (evt && evt.target) || null;
         if (!isAppContentTarget(target)) return;
-        cleanupModalArtifacts();
-        runInit({ preserveScroll: true });
-        if (target && typeof target.querySelector === 'function' && target.querySelector('.settings-sidebar')) {
-            window.scrollTo(0, 0);
-        }
+        if (htmxInitScheduled) return;
+        htmxInitScheduled = true;
+        requestAnimationFrame(() => {
+            htmxInitScheduled = false;
+            cleanupModalArtifacts();
+            runInit({ preserveScroll: true });
+            if (target && typeof target.querySelector === 'function' && target.querySelector('.settings-sidebar')) {
+                window.scrollTo(0, 0);
+            }
+        });
     }
 
     document.body.addEventListener('htmx:beforeSwap', function(evt) {
@@ -113,6 +120,6 @@
             cleanupModalArtifacts();
         }
     });
-    document.body.addEventListener('htmx:afterSwap', handleHtmxInit);
+    // Run page init only after settle to avoid duplicate init cycles on the same swap.
     document.body.addEventListener('htmx:afterSettle', handleHtmxInit);
 })();

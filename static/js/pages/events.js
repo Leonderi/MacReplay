@@ -30,6 +30,7 @@
             outputTemplate: document.getElementById('filterOutputTemplate'),
             outputGroup: document.getElementById('filterOutputGroup'),
             channelNumberStart: document.getElementById('filterChannelNumberStart'),
+            autoCreateChannels: document.getElementById('filterAutoCreateChannels'),
             priority: document.getElementById('filterPriority'),
             enabled: document.getElementById('filterEnabled'),
         };
@@ -252,6 +253,7 @@
             fields.outputTemplate.value = '{home} vs {away} | {date} {time}';
             fields.outputGroup.value = 'EVENTS';
             fields.channelNumberStart.value = '10000';
+            fields.autoCreateChannels.checked = false;
             fields.enabled.checked = true;
             selectedGroupTokens = [];
             renderSelectedGroupsSummary();
@@ -279,6 +281,7 @@
                     output_template: fields.outputTemplate.value.trim(),
                     output_group_name: fields.outputGroup.value.trim(),
                     channel_number_start: Number(fields.channelNumberStart.value || 10000),
+                    auto_create_channels: !!fields.autoCreateChannels.checked,
                     priority: Number(fields.priority.value || 100)
                 }
             };
@@ -299,6 +302,7 @@
                 team_filters: [],
                 output_group_name: rule.output_group_name || 'EVENTS',
                 channel_number_start: Number(rule.channel_number_start || 10000),
+                auto_create_channels: !!rule.auto_create_channels,
                 output_template: rule.output_template || '{home} vs {away} | {date} {time}'
             };
         }
@@ -427,6 +431,7 @@
                     fields.outputTemplate.value = rule.output_template || '{home} vs {away} | {date} {time}';
                     fields.outputGroup.value = rule.output_group_name || 'EVENTS';
                     fields.channelNumberStart.value = String(rule.channel_number_start || 10000);
+                    fields.autoCreateChannels.checked = !!rule.auto_create_channels;
                     fields.enabled.checked = !!rule.enabled;
                     selectedGroupTokens = (rule.channel_groups || []).map(function(value) {
                         const raw = String(value || '').trim();
@@ -505,6 +510,7 @@
                         <div class="mb-2"><strong>Groups:</strong> <div class="mt-1">${renderGroups(rule)}</div></div>
                         <div class="mb-2"><strong>Generated Group:</strong> <code>${rule.output_group_name || 'EVENTS'}</code></div>
                         <div class="mb-2"><strong>Number Start:</strong> <code>${rule.channel_number_start || 10000}</code></div>
+                        <div class="mb-2"><strong>Auto Create:</strong> <code>${rule.auto_create_channels ? 'on' : 'off'}</code></div>
                         <div class="mb-2"><strong>Channel Regex:</strong> <code>${rule.channel_regex || '-'}</code></div>
                         <div class="mb-2"><strong>EPG Pattern:</strong> <code>${rule.epg_pattern || '-'}</code></div>
                         <div class="mb-3"><strong>Extract Regex:</strong> <code>${rule.extract_regex || '-'}</code></div>
@@ -718,6 +724,28 @@
                     if (!data || !data.ok) {
                         showToast((data && data.error) || 'Could not save filter.', 'error');
                         return;
+                    }
+                    const savedRuleId = data.id || Number(id || 0) || null;
+                    if (payload.rule.auto_create_channels && savedRuleId) {
+                        const autoPayload = {
+                            rule_id: savedRuleId,
+                            provider: 'espn',
+                            use_espn_events: !!payload.rule.use_espn_events,
+                            espn_event_window_hours: Number(payload.rule.espn_event_window_hours || 72),
+                            sport: payload.rule.sport || '',
+                            groups: selectedGroupTokens.slice(),
+                            channel_regex: payload.rule.channel_regex || '',
+                            epg_pattern: payload.rule.epg_pattern || '',
+                            extract_regex: payload.rule.extract_regex || '',
+                            league_filters: payload.rule.league_filters || [],
+                            team_filters: payload.rule.team_filters || [],
+                            output_group_name: payload.rule.output_group_name || 'EVENTS',
+                            channel_number_start: Number(payload.rule.channel_number_start || 10000),
+                            auto_create_channels: true,
+                            output_template: payload.rule.output_template || '{home} vs {away} | {date} {time}'
+                        };
+                        // Fire-and-forget auto generation pass after save.
+                        runEventPreview(autoPayload, selectedGroupsSummary);
                     }
                     if (bsModal) bsModal.hide();
                     showToast('Filter saved.', 'success');
@@ -1154,6 +1182,7 @@
                     team_filters: payload.team_filters || [],
                     output_group_name: payload.output_group_name || 'EVENTS',
                     channel_number_start: Number(payload.channel_number_start || 10000),
+                    auto_create_channels: !!payload.auto_create_channels,
                     output_template: payload.output_template || '{home} vs {away} | {date} {time}'
                 },
                 target
