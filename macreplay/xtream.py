@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener, ProxyHandler
+from urllib.error import HTTPError, URLError
 
 logger = logging.getLogger("MacReplay.xtream")
 
@@ -27,7 +28,7 @@ def _build_player_api_url(base_url, username, password, action=None, params=None
     return f"{base}/player_api.php?{urlencode(query)}"
 
 
-def _request_json(url, proxy=None, timeout=20, user_agent=None):
+def _request_json(url, proxy=None, timeout=20, user_agent=None, return_meta=False):
     handlers = []
     if proxy:
         handlers.append(ProxyHandler({"http": proxy, "https": proxy}))
@@ -36,16 +37,28 @@ def _request_json(url, proxy=None, timeout=20, user_agent=None):
     try:
         with opener.open(req, timeout=timeout) as resp:
             data = resp.read()
+    except HTTPError as exc:
+        logger.warning("Xtream request failed: HTTP %s | url=%s", exc.code, url)
+        error = {"type": "http", "status_code": int(exc.code), "reason": str(exc.reason or "")}
+        return (None, error) if return_meta else None
+    except URLError as exc:
+        logger.warning("Xtream request failed: %s | url=%s", exc, url)
+        error = {"type": "network", "reason": str(getattr(exc, "reason", exc) or "")}
+        return (None, error) if return_meta else None
     except Exception as exc:
         logger.warning("Xtream request failed: %s | url=%s", exc, url)
-        return None
+        error = {"type": "request", "reason": str(exc)}
+        return (None, error) if return_meta else None
     if not data:
-        return None
+        error = {"type": "empty", "reason": "empty response"}
+        return (None, error) if return_meta else None
     try:
-        return json.loads(data.decode("utf-8", errors="ignore"))
+        payload = json.loads(data.decode("utf-8", errors="ignore"))
+        return (payload, None) if return_meta else payload
     except Exception as exc:
         logger.warning("Xtream JSON parse failed: %s", exc)
-        return None
+        error = {"type": "parse", "reason": str(exc)}
+        return (None, error) if return_meta else None
 
 
 def get_live_categories(base_url, username, password, proxy=None, user_agent=None):
@@ -125,9 +138,11 @@ def get_account_info(base_url, username, password, proxy=None, user_agent=None):
         return {}
 
     url = _build_player_api_url(base_url, username, password, action=None)
-    payload = _request_json(url, proxy=proxy, user_agent=user_agent)
+    payload, request_error = _request_json(
+        url, proxy=proxy, user_agent=user_agent, return_meta=True
+    )
     if not isinstance(payload, dict):
-        return {}
+        return {"_error": request_error or {"type": "unknown", "reason": "invalid response"}}
 
     user_info = payload.get("user_info") if isinstance(payload.get("user_info"), dict) else {}
     server_info = payload.get("server_info") if isinstance(payload.get("server_info"), dict) else {}

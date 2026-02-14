@@ -223,7 +223,7 @@
                         {% for login in xtream_logins %}
                         <tr data-xtream-user="{{ login.get('username', '')|e }}">
                             <td class="mac-address">{{ login.get('username', '') }}</td>
-                            <td>{{ login.get('status', '-') or '-' }}</td>
+                            <td class="{% if login.get('auth_error') %}status-auth-error{% endif %}">{{ login.get('status', '-') or '-' }}</td>
                             <td>{{ login.get('expires_iso', '-') or '-' }}</td>
                             <td class="{% if login.get('days_left') is not none and login.get('days_left') <= 7 %}status-expiring-soon{% elif login.get('days_left') is not none %}status-valid{% endif %}">
                                 {% if login.get('days_left') is not none %}{{ login.get('days_left') }}{% else %}-{% endif %}

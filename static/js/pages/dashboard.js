@@ -15,10 +15,11 @@ function showNotification(message, type = 'success', duration = 3000) {
 function refreshStreams() {
     const container = document.getElementById('streamsContainer');
     if (!container) return;
-    fetch('/streaming')
+    return fetch('/streaming')
         .then(response => response.json())
         .then(data => {
             displayStreams(data);
+            return data;
         })
         .catch(error => {
             console.error('Error fetching streams:', error);
@@ -26,6 +27,43 @@ function refreshStreams() {
                 container.innerHTML =
                     '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> Error loading stream data</div>';
             }
+            return {};
+        });
+}
+
+function refreshDashboardStats() {
+    return fetch('/api/dashboard/stats')
+        .then(response => response.json())
+        .then(stats => {
+            setText('statActiveStreams', stats.active_streams ?? '-');
+            setText('statActiveClients', `Clients: ${stats.active_clients ?? '-'}`);
+            setText('statPortals', `${stats.portals_enabled ?? '-'} / ${stats.portals_total ?? '-'}`);
+            setText(
+                'statPortalTypes',
+                `Stalker: ${stats.stalker_portals ?? '-'} · Xtream: ${stats.xtream_portals ?? '-'}`
+            );
+            setText('statChannels', `${stats.channels_enabled ?? '-'} / ${stats.channels_total ?? '-'}`);
+            setText('statEvents', `Event: ${stats.event_channels_enabled ?? '-'}`);
+            setText('statGroups', `${stats.groups_active ?? '-'} / ${stats.groups_total ?? '-'}`);
+            setText('statLastEpg', `Last EPG: ${formatTimestamp(stats.last_epg_refresh)}`);
+            setText(
+                'statMacExpiry',
+                `MACs: 7d ${stats.macs_expiring_7d ?? 0} · 30d ${stats.macs_expiring_30d ?? 0} · expired ${stats.macs_expired ?? 0}`
+            );
+            setText(
+                'statXtreamExpiry',
+                `Xtream Logins: 7d ${stats.xtream_logins_expiring_7d ?? 0} · 30d ${stats.xtream_logins_expiring_30d ?? 0}`
+            );
+            renderRecentChannels(stats.recent_channels || []);
+            renderTopPortals(stats.top_portals_active || []);
+            renderTopMacDurations(stats.top_mac_durations || []);
+            renderTopFailedMacs(stats.top_failed_macs || []);
+            renderTopReliableChannels(stats.top_reliable_channels || []);
+            setStatusBadge('statusEpgBadge', 'EPG', stats.status_epg);
+            setStatusBadge('statusStreamingBadge', 'Streaming', stats.status_streaming || 'ok');
+        })
+        .catch(error => {
+            console.error('Error loading dashboard stats:', error);
         });
 }
 
@@ -48,13 +86,18 @@ function displayStreams(streams) {
             // Escape HTML to prevent XSS
             const portalName = escapeHtml(stream['portal name']);
             const channelName = escapeHtml(stream['channel name']);
+            const sourcePortal = escapeHtml(stream['source portal name'] || '');
+            const sourceChannel = escapeHtml(stream['source channel name'] || '');
+            const sourceInfo = (sourcePortal || sourceChannel)
+                ? `<div class="small text-info">Source: ${sourcePortal || '-'} · ${sourceChannel || '-'}</div>`
+                : '';
             const mac = escapeHtml(stream.mac);
             const client = escapeHtml(stream.client);
 
             html += `
                 <tr>
                     <td>${portalName}</td>
-                    <td>${channelName}</td>
+                    <td>${channelName}${sourceInfo}</td>
                     <td><code>${mac}</code></td>
                     <td>${client}</td>
                     <td>${startTime.toLocaleString()}</td>
@@ -86,6 +129,148 @@ function formatDuration(seconds) {
     } else {
         return `${secs}s`;
     }
+}
+
+function formatTimestamp(value) {
+    if (!value) return '-';
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleString();
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric) && numeric > 0) {
+        const ms = numeric > 1e12 ? numeric : (numeric * 1000);
+        const numDate = new Date(ms);
+        if (!Number.isNaN(numDate.getTime())) return numDate.toLocaleString();
+    }
+    return String(value);
+}
+
+function setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+}
+
+function setStatusBadge(id, label, state) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const normalized = String(state || 'unknown').toLowerCase();
+    el.classList.remove('bg-success', 'bg-warning', 'bg-danger', 'bg-secondary');
+    if (normalized === 'ok') el.classList.add('bg-success');
+    else if (normalized === 'stale') el.classList.add('bg-warning');
+    else if (normalized === 'error') el.classList.add('bg-danger');
+    else el.classList.add('bg-secondary');
+    el.textContent = `${label}: ${normalized.toUpperCase()}`;
+}
+
+function renderRecentChannels(items) {
+    const list = document.getElementById('recentChannelsList');
+    if (!list) return;
+    if (!items || items.length === 0) {
+        list.classList.add('text-muted');
+        list.textContent = 'No active streams.';
+        return;
+    }
+    list.classList.remove('text-muted');
+    list.innerHTML = items.map(item => {
+        const channel = escapeHtml(item.channel_name || '-');
+        const portal = escapeHtml(item.portal_name || '-');
+        const sourcePortal = escapeHtml(item.source_portal_name || '');
+        const sourceChannel = escapeHtml(item.source_channel_name || '');
+        const sourceLine = (sourcePortal || sourceChannel)
+            ? `<div class="dashboard-recent-meta">Source: ${sourcePortal || '-'} · ${sourceChannel || '-'}</div>`
+            : '';
+        const client = escapeHtml(item.client || '-');
+        const started = formatTimestamp((item.start_time || 0) * 1000);
+        return `
+            <div class="dashboard-recent-item">
+                <div class="dashboard-recent-main">
+                    <div class="dashboard-recent-channel">${channel}</div>
+                    <div class="dashboard-recent-meta">${portal} · ${client}</div>
+                    ${sourceLine}
+                </div>
+                <div class="dashboard-recent-time">${started}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderTopPortals(items) {
+    const list = document.getElementById('topPortalsList');
+    if (!list) return;
+    if (!items || items.length === 0) {
+        list.classList.add('text-muted');
+        list.textContent = 'No active streams.';
+        return;
+    }
+    list.classList.remove('text-muted');
+    list.innerHTML = items.map(item => `
+        <div class="dashboard-simple-item">
+            <strong>${escapeHtml(item.portal_name || '-')}</strong>
+            <span>${item.count || 0}</span>
+        </div>
+    `).join('');
+}
+
+function renderTopMacDurations(items) {
+    const list = document.getElementById('topMacDurationsList');
+    if (!list) return;
+    if (!items || items.length === 0) {
+        list.classList.add('text-muted');
+        list.textContent = 'No active streams.';
+        return;
+    }
+    list.classList.remove('text-muted');
+    list.innerHTML = items.map(item => {
+        const mac = escapeHtml(item.mac || '-');
+        const total = formatDuration(item.total_duration || 0);
+        const avg = formatDuration(item.avg_duration || 0);
+        return `
+            <div class="dashboard-simple-item">
+                <strong>${mac}</strong>
+                <span>${total} (avg ${avg})</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderTopFailedMacs(items) {
+    const list = document.getElementById('topFailedMacsList');
+    if (!list) return;
+    if (!items || items.length === 0) {
+        list.classList.add('text-muted');
+        list.textContent = 'No failures in last 24h.';
+        return;
+    }
+    list.classList.remove('text-muted');
+    list.innerHTML = items.map(item => `
+        <div class="dashboard-simple-item">
+            <strong>${escapeHtml(item.label || '-')}</strong>
+            <span>${item.count || 0}</span>
+        </div>
+    `).join('');
+}
+
+function renderTopReliableChannels(items) {
+    const list = document.getElementById('topReliableChannelsList');
+    if (!list) return;
+    if (!items || items.length === 0) {
+        list.classList.add('text-muted');
+        list.textContent = 'Not enough stream history.';
+        return;
+    }
+    list.classList.remove('text-muted');
+    list.innerHTML = items.map(item => {
+        const channel = escapeHtml(item.channel_name || '-');
+        const portal = escapeHtml(item.portal_name || '-');
+        const starts = Number(item.starts || 0);
+        const successes = Number(item.successes || 0);
+        const ratio = Math.round((Number(item.ratio || 0) * 100));
+        return `
+            <div class="dashboard-simple-item">
+                <strong>${channel}</strong>
+                <span>${ratio}% (${successes}/${starts}) · ${portal}</span>
+            </div>
+        `;
+    }).join('');
 }
 
 function refreshLineup() {
@@ -139,7 +324,7 @@ function copyToClipboard(elementId) {
 }
 
 // Initialize page
-document.addEventListener('DOMContentLoaded', function() {
+function initializeDashboard() {
     const baseUrl = window.location.origin;
     const serverUrlEl = document.getElementById('serverUrl');
     const xmltvUrlEl = document.getElementById('xmltvUrl');
@@ -153,10 +338,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initial load
     refreshStreams();
+    refreshDashboardStats();
 
     // Auto-refresh streams every 30 seconds
-    streamsRefreshInterval = setInterval(refreshStreams, 30000);
-});
+    streamsRefreshInterval = setInterval(function() {
+        refreshStreams();
+        refreshDashboardStats();
+    }, 30000);
+}
+
+initializeDashboard();
 
         window.refreshStreams = refreshStreams;
         window.copyToClipboard = copyToClipboard;

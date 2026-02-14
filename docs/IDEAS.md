@@ -17,11 +17,21 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
 ## UI/UX Verbesserungen
 
 ### Dashboard / Übersichtsseite
-- ⬜ Neue Startseite mit Gesamtübersicht
-- ⬜ Widget: Aktive Portale, MACs, Channels Statistik
-- ⬜ Widget: MACs die in 7/30 Tagen ablaufen
-- ⬜ Widget: Zuletzt genutzte Channels
-- ⬜ Widget: System-Status (EPG aktuell, letzte Fehler)
+- ✅ Dashboard als Landingpage + im Menü ganz links
+- ✅ Widget-Row: Aktive Streams/Clients, Portale, Channels, Groups, letzter EPG-Refresh
+- ✅ Widget: MACs/Logins die in 7/30 Tagen ablaufen
+- 🔄 Widget: Zuletzt genutzte Channels
+- 🔄 Widget: System-Status (EPG aktuell, letzte Fehler)
+- ✅ Widget: Most Used Portals (nur aktive Streams)
+- ✅ Widget: Stream-Dauer pro MAC (nur aktive Streams)
+- ✅ Widget: Most Failed MACs (24h)
+- ✅ Widget: Most Reliable Channels (24h, basierend auf Erfolgsquote)
+- ✅ Persistente Dashboard-Statistiken (24h Auswertung über DB-Events)
+- ✅ Aktive Event-Streams zeigen Original-Quelle (Portal + Channel) im Dashboard
+- ✅ Grouped-Play Stabilisierung: EOF-Backoff pro Portal/Channel mit exponentiellem Retry-Abstand
+- ✅ Persistenter Stream-Backoff (Channel+Portal) für stabileres Failover nach Neustarts
+- ✅ Grouped-Play Ranking berücksichtigt EOF-Historie (24h/30m), um instabile Kandidaten später zu probieren
+- ✅ Health-basiertes Ranking mit längerem Fenster (konfigurierbar): stabile Portale/MACs/Channels werden upgevotet, fehlerhafte downgevotet
 
 ### Suche & Filter
 - ⬜ Globale Suche über Portale, MACs und Channels
@@ -86,6 +96,7 @@ patterns = {
 - ⬜ Tastatur-Shortcuts (z.B. `/` für Suche)
 - ⬜ Sortierung der Portale per Drag & Drop
 - ✅ Favicon im Browser-Tab
+- ✅ Playlist-Export optional als gruppierte Single-Channel-Variante (zusätzlich zu per-Portal)
 - ✅ Settings neu strukturieren (Side-Nav + mehrere Seiten, klare Sektionen)
 - ⬜ Settings: Globale Portal-Defaults in Settings, Portal-Verwaltung bleibt in `/portals`
 - ✅ Kompakte Ansicht für Channel-Liste
@@ -182,7 +193,7 @@ Die Stalker Portal API liefert via `?type=stb&action=get_profile` zusätzliche I
 
 ### History & Logs
 - ⬜ MAC-Änderungs-Historie (wann hinzugefügt/gelöscht)
-- ⬜ Erweitertes Log-Viewing mit Filter
+- 🔄 Erweitertes Log-Viewing mit Stream-Exit-Gründen (disconnect/error/eof), Dauer und FFmpeg-RC
 - ⬜ API-Zugriffs-Log
 - ⬜ Log-Export als Datei
 
@@ -222,6 +233,7 @@ Die Stalker Portal API liefert via `?type=stb&action=get_profile` zusätzliche I
 - ⬜ Database Connection Pooling
 - ✅ ChannelsDVR Cache persistiert auf Disk (pro Land)
 - 🔄 ChannelsDVR Cache: Migration/Kompatibilität prüfen
+- ✅ Adaptive Link-Cache-TTL pro Stalker-Portal (Auto-Tuning bei 401/403)
 
 ---
 
@@ -335,7 +347,7 @@ EPG-Eintrag:      "Live BL: Werder Bremen - TSG Hoffenheim" @ 15:30
 ### Automatische Backup-Channels
 - ⬜ Channels mit gleichem (normalisierten) Namen erkennen
 - ⬜ Automatisch als Backup-Gruppe zusammenfassen
-- ⬜ Failover bei Stream-Ausfall zum nächsten Backup
+- ✅ Grouped-Playback Failover im gleichen Client-Request (bei EOF auf nächsten Kandidaten wechseln)
 - ⬜ Priorität per Drag & Drop festlegen
 
 **Offene Fragen:**
@@ -377,6 +389,7 @@ EPG-Eintrag:      "Live BL: Werder Bremen - TSG Hoffenheim" @ 15:30
   - ✅ Login via `player_api.php`
   - ✅ Kategorien/Streams/EPG ins bestehende Schema gemappt
   - ✅ UI um Xtream-Felder erweitert (URL, mehrere Logins, User-Agent, Proxy)
+  - ✅ Hintergrund-Login-Checks + Markierung invalider Logins (z. B. 403)
   - 🔄 Feinschliff bei Mapping/UX und Fehlerfällen
 
 ---

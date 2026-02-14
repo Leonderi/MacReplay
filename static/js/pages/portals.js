@@ -898,6 +898,7 @@ function updateXtreamLoginsTable(portalId, logins) {
         const status = login.status || '-';
         const expires = login.expires_iso || '-';
         const daysLeft = (login.days_left === null || login.days_left === undefined) ? '-' : login.days_left;
+        const statusClass = login.auth_error ? 'status-auth-error' : '';
         const daysClass = (login.days_left !== null && login.days_left !== undefined && login.days_left <= 7)
             ? 'status-expiring-soon'
             : ((login.days_left !== null && login.days_left !== undefined) ? 'status-valid' : '');
@@ -906,7 +907,7 @@ function updateXtreamLoginsTable(portalId, logins) {
         return `
             <tr data-xtream-user="${username}">
                 <td class="mac-address">${username}</td>
-                <td>${status}</td>
+                <td class="${statusClass}">${status}</td>
                 <td>${expires}</td>
                 <td class="${daysClass}">${daysLeft}</td>
                 <td>${active} / ${max}</td>

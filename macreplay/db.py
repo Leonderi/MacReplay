@@ -440,6 +440,102 @@ def init_db(get_portals, logger):
         ON event_generated_channels(source_portal_id, source_channel_id)
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stream_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            portal_id TEXT,
+            portal_name TEXT,
+            channel_id TEXT,
+            channel_name TEXT,
+            client_ip TEXT,
+            mac TEXT,
+            started_at INTEGER,
+            ended_at INTEGER,
+            duration_sec INTEGER,
+            stream_mode TEXT
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_stream_sessions_started
+        ON stream_sessions(started_at)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_stream_sessions_portal
+        ON stream_sessions(portal_name, started_at)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_stream_sessions_mac
+        ON stream_sessions(mac, started_at)
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_stream_sessions_portal_channel_started
+        ON stream_sessions(portal_id, channel_id, started_at)
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_stream_sessions_portal_mac_started
+        ON stream_sessions(portal_id, mac, started_at)
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mac_failures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            portal_id TEXT,
+            portal_name TEXT,
+            channel_id TEXT,
+            mac TEXT,
+            failed_at INTEGER
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_mac_failures_time
+        ON mac_failures(failed_at)
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_mac_failures_mac
+        ON mac_failures(mac, failed_at)
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_mac_failures_portal_channel_time
+        ON mac_failures(portal_id, channel_id, failed_at)
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stream_backoff (
+            scope TEXT NOT NULL,              -- portal_channel | portal
+            portal_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL DEFAULT '',
+            until_ts INTEGER NOT NULL DEFAULT 0,
+            streak INTEGER NOT NULL DEFAULT 0,
+            last_eof_ts INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (scope, portal_id, channel_id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_stream_backoff_until
+        ON stream_backoff(until_ts)
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stream_eof_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            portal_id TEXT NOT NULL,
+            channel_id TEXT,
+            failed_at INTEGER NOT NULL
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_stream_eof_events_portal_time
+        ON stream_eof_events(portal_id, failed_at)
+    ''')
+
     espn_team_cols = {row["name"] for row in cursor.execute("PRAGMA table_info(espn_teams_cache)").fetchall()}
     if "team_aliases" not in espn_team_cols:
         cursor.execute("ALTER TABLE espn_teams_cache ADD COLUMN team_aliases TEXT DEFAULT '[]'")

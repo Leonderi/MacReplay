@@ -14,6 +14,115 @@
     </div>
 </div>
 
+<div class="row mb-3" id="dashboardWidgets">
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card dashboard-widget-card">
+            <div class="card-body">
+                <div class="dashboard-widget-label">Active Streams</div>
+                <div class="dashboard-widget-value" id="statActiveStreams">-</div>
+                <div class="dashboard-widget-sub" id="statActiveClients">Clients: -</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card dashboard-widget-card">
+            <div class="card-body">
+                <div class="dashboard-widget-label">Portals</div>
+                <div class="dashboard-widget-value" id="statPortals">-</div>
+                <div class="dashboard-widget-sub" id="statPortalTypes">Stalker: - · Xtream: -</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card dashboard-widget-card">
+            <div class="card-body">
+                <div class="dashboard-widget-label">Channels</div>
+                <div class="dashboard-widget-value" id="statChannels">-</div>
+                <div class="dashboard-widget-sub" id="statEvents">Event: -</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="card dashboard-widget-card">
+            <div class="card-body">
+                <div class="dashboard-widget-label">Groups</div>
+                <div class="dashboard-widget-value" id="statGroups">-</div>
+                <div class="dashboard-widget-sub" id="statLastEpg">Last EPG: -</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-12 mb-3">
+        <div class="card dashboard-widget-card h-100">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-hourglass-half"></i> Expiring Access</h6>
+            </div>
+            <div class="card-body">
+                <div class="dashboard-widget-sub" id="statMacExpiry">MACs: 7d - · 30d - · expired -</div>
+                <div class="dashboard-widget-sub mt-1" id="statXtreamExpiry">Xtream Logins: 7d - · 30d -</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="card dashboard-widget-card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-history"></i> Recently Used Channels (active)</h6>
+            </div>
+            <div class="card-body">
+                <div id="recentChannelsList" class="dashboard-recent-list text-muted">No active streams.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-md-3 mb-3">
+        <div class="card dashboard-widget-card h-100">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-chart-pie"></i> Most Used Portals (24h)</h6>
+            </div>
+            <div class="card-body">
+                <div id="topPortalsList" class="dashboard-simple-list text-muted">No active streams.</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card dashboard-widget-card h-100">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-microchip"></i> Stream Duration per MAC (24h)</h6>
+            </div>
+            <div class="card-body">
+                <div id="topMacDurationsList" class="dashboard-simple-list text-muted">No active streams.</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card dashboard-widget-card h-100">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-triangle-exclamation"></i> Most Failed MACs (24h)</h6>
+            </div>
+            <div class="card-body">
+                <div id="topFailedMacsList" class="dashboard-simple-list text-muted">No failures in last 24h.</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card dashboard-widget-card h-100">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-shield-alt"></i> Most Reliable Channels (24h)</h6>
+            </div>
+            <div class="card-body">
+                <div id="topReliableChannelsList" class="dashboard-simple-list text-muted">Not enough stream history.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="row">
     <div class="col-md-12">
         <div class="card">
@@ -84,6 +193,10 @@
                 <h5><i class="fas fa-info-circle"></i> System Information</h5>
             </div>
             <div class="card-body">
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    <span class="badge dashboard-status-badge bg-secondary" id="statusEpgBadge">EPG: -</span>
+                    <span class="badge dashboard-status-badge bg-success" id="statusStreamingBadge">Streaming: OK</span>
+                </div>
                 <table class="table table-sm">
                     <tr>
                         <td>Server Status:</td>

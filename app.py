@@ -61,6 +61,7 @@ from macreplay.services.scheduler import (
     start_custom_epg_scheduler,
     start_event_channel_cleanup_scheduler,
     start_event_auto_create_scheduler,
+    start_xtream_logins_scheduler,
 )
 logger = setup_logging(LOG_DIR)
 
@@ -174,6 +175,8 @@ cached_playlist = {}
 last_playlist_host = None
 cached_xmltv = None
 last_updated = 0
+recent_stream_history = deque(maxlen=500)
+recent_failed_macs = deque(maxlen=1500)
 epg_channel_ids = set()
 epg_channel_ids_lock = threading.Lock()
 epg_channel_map = {}
@@ -4011,6 +4014,8 @@ runtime_state = build_runtime_state(
     get_epg_source_status=get_epg_source_status,
     LOG_DIR=LOG_DIR,
     occupied=occupied,
+    recent_stream_history=recent_stream_history,
+    recent_failed_macs=recent_failed_macs,
     get_cached_lineup=_get_cached_lineup,
     effective_display_name=effective_display_name,
     get_cached_playlist=_get_cached_playlist,
@@ -4155,6 +4160,87 @@ def run_event_auto_create_tick():
     return {"rules": len(rows), "ok": ok_count, "failed": fail_count}
 
 
+def refresh_xtream_logins_tick():
+    portals = getPortals()
+    changed = False
+    portal_count = 0
+    login_count = 0
+    invalid_count = 0
+
+    for portal_id, portal in portals.items():
+        if portal.get("type", "stalker") != "xtream":
+            continue
+        portal_count += 1
+        logins = portal.get("xtream logins")
+        if not isinstance(logins, list) or not logins:
+            continue
+
+        refreshed = []
+        for login in logins:
+            if not isinstance(login, dict):
+                continue
+            username = str(login.get("username") or "").strip()
+            password = str(login.get("password") or "").strip()
+            if not username or not password:
+                continue
+            login_count += 1
+            info = xtream.get_account_info(
+                portal.get("url", ""),
+                username,
+                password,
+                proxy=portal.get("proxy", ""),
+                user_agent=portal.get("xtream user agent", ""),
+            )
+
+            merged = dict(login)
+            merged["username"] = username
+            merged["password"] = password
+            if info and info.get("_error"):
+                status_code = (info.get("_error") or {}).get("status_code")
+                if status_code == 403:
+                    merged["status"] = "FORBIDDEN (403)"
+                elif status_code == 401:
+                    merged["status"] = "UNAUTHORIZED (401)"
+                elif status_code:
+                    merged["status"] = f"ERROR ({status_code})"
+                else:
+                    merged["status"] = "UNREACHABLE"
+                merged["auth_error"] = True
+                merged["status_code"] = status_code
+                merged["expires_iso"] = ""
+                merged["days_left"] = None
+                merged["active_cons"] = 0
+                merged["max_connections"] = 0
+                invalid_count += 1
+            elif info:
+                merged["status"] = info.get("status") or merged.get("status", "")
+                merged["auth_error"] = False
+                merged["status_code"] = None
+                merged["is_trial"] = info.get("is_trial")
+                merged["exp_timestamp"] = info.get("exp_timestamp")
+                merged["expires_iso"] = info.get("expires_iso") or ""
+                merged["days_left"] = info.get("days_left")
+                merged["active_cons"] = info.get("active_cons", 0)
+                merged["max_connections"] = info.get("max_connections", 0)
+                merged["created_at"] = info.get("created_at")
+                merged["server_timezone"] = info.get("server_timezone") or ""
+                merged["server_time_now"] = info.get("server_time_now") or ""
+            refreshed.append(merged)
+
+        if refreshed and refreshed != logins:
+            portals[portal_id]["xtream logins"] = refreshed
+            if refreshed:
+                portals[portal_id]["xtream username"] = refreshed[0].get("username", "")
+                portals[portal_id]["xtream password"] = refreshed[0].get("password", "")
+            changed = True
+
+    if changed:
+        savePortals(portals)
+        filter_cache.clear()
+
+    return {"portals": portal_count, "logins": login_count, "invalid": invalid_count}
+
+
 def start_refresh():
     # Run refresh functions in separate threads
     # First refresh channels cache, then refresh lineup and xmltv
@@ -4206,6 +4292,11 @@ def start_refresh():
         getSettings=getSettings,
         logger=logger,
         run_auto_create=run_event_auto_create_tick,
+    )
+    start_xtream_logins_scheduler(
+        getSettings=getSettings,
+        logger=logger,
+        refresh_xtream_logins=refresh_xtream_logins_tick,
     )
 
 

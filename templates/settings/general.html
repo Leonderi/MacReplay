@@ -112,6 +112,47 @@
                     Number of MACs to test in parallel. Higher = faster but more server load.
                 </div>
             </div>
+
+            <div class="mb-3">
+                <label for="stream_short_failure_seconds" class="form-label">Short Stream Failure Threshold (seconds)</label>
+                <input type="number" class="form-control" id="stream_short_failure_seconds" name="stream short failure seconds"
+                       value="{{ settings['stream short failure seconds'] }}" min="1" max="60">
+                <div class="form-text">
+                    Very short stalker stream starts without media output count as failed MAC attempts unless client disconnected.
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="stream_health_lookback_days" class="form-label">Health Ranking Lookback (days)</label>
+                        <input type="number" class="form-control" id="stream_health_lookback_days" name="stream health lookback days"
+                               value="{{ settings['stream health lookback days'] }}" min="1" max="365">
+                        <div class="form-text">
+                            Longer lookback means stable portals/MACs/channels are preferred for longer.
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="stream_success_min_seconds" class="form-label">Success Upvote Threshold (seconds)</label>
+                        <input type="number" class="form-control" id="stream_success_min_seconds" name="stream success min seconds"
+                               value="{{ settings['stream success min seconds'] }}" min="5" max="600">
+                        <div class="form-text">
+                            Streams with at least this duration count as a positive reliability signal.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label for="xtream_login_check_interval_minutes" class="form-label">Xtream Login Check Interval (minutes)</label>
+                <input type="number" class="form-control" id="xtream_login_check_interval_minutes" name="xtream login check interval minutes"
+                       value="{{ settings['xtream login check interval minutes'] }}" min="0" max="1440" step="1">
+                <div class="form-text">
+                    0 disables background checks. Invalid Xtream logins (e.g. 403) are marked and deprioritized on stream start.
+                </div>
+            </div>
         </div>
     </div>
 
@@ -172,6 +213,27 @@
                 <label class="form-check-label" for="sort_playlist_by_channel_name">
                     Sort playlist by channel name
                 </label>
+            </div>
+
+            <input type="hidden" name="playlist export per portal channels" value="false">
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="playlist_export_per_portal_channels" name="playlist export per portal channels"
+                       value="true" {{ 'checked' if settings['playlist export per portal channels'] }}>
+                <label class="form-check-label" for="playlist_export_per_portal_channels">
+                    Export per-portal channels
+                </label>
+            </div>
+
+            <input type="hidden" name="playlist export grouped channels" value="false">
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="playlist_export_grouped_channels" name="playlist export grouped channels"
+                       value="true" {{ 'checked' if settings['playlist export grouped channels'] }}>
+                <label class="form-check-label" for="playlist_export_grouped_channels">
+                    Export grouped channels (one entry per editor group)
+                </label>
+                <div class="form-text">
+                    If enabled, duplicate matched channels are exported once and resolved dynamically via the proxy.
+                </div>
             </div>
         </div>
     </div>

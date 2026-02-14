@@ -90,8 +90,27 @@ def create_portal_blueprint(
             merged = dict(login)
             merged["username"] = username
             merged["password"] = password
-            if info:
+            if info and info.get("_error"):
+                error = info.get("_error") or {}
+                status_code = error.get("status_code")
+                if status_code == 403:
+                    merged["status"] = "FORBIDDEN (403)"
+                elif status_code == 401:
+                    merged["status"] = "UNAUTHORIZED (401)"
+                elif status_code:
+                    merged["status"] = f"ERROR ({status_code})"
+                else:
+                    merged["status"] = "UNREACHABLE"
+                merged["auth_error"] = True
+                merged["status_code"] = status_code
+                merged["expires_iso"] = ""
+                merged["days_left"] = None
+                merged["active_cons"] = 0
+                merged["max_connections"] = 0
+            elif info:
                 merged["status"] = info.get("status") or merged.get("status", "")
+                merged["auth_error"] = False
+                merged["status_code"] = None
                 merged["is_trial"] = info.get("is_trial")
                 merged["exp_timestamp"] = info.get("exp_timestamp")
                 merged["expires_iso"] = info.get("expires_iso") or ""

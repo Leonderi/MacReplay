@@ -60,6 +60,11 @@ def register_blueprints(*, app, state):
         state.misc.create_misc_blueprint(
             LOG_DIR=state.misc.LOG_DIR,
             occupied=state.misc.occupied,
+            get_db_connection=state.misc.get_db_connection,
+            getPortals=state.misc.getPortals,
+            getSettings=state.misc.getSettings,
+            recent_stream_history=state.misc.recent_stream_history,
+            recent_failed_macs=state.misc.recent_failed_macs,
             refresh_custom_sources=state.misc.refresh_custom_sources,
             get_epg_source_status=state.misc.get_epg_source_status,
         )
@@ -98,5 +103,7 @@ def register_blueprints(*, app, state):
             score_mac_for_selection=state.streaming.score_mac_for_selection,
             occupied=state.streaming.occupied,
             hls_manager=state.streaming.hls_manager,
+            recent_stream_history=state.streaming.recent_stream_history,
+            recent_failed_macs=state.streaming.recent_failed_macs,
         )
     )

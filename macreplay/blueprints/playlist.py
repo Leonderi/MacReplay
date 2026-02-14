@@ -1,3 +1,5 @@
+import base64
+import json
 import re
 import unicodedata
 from urllib.parse import quote, urlparse
@@ -136,6 +138,16 @@ def create_playlist_blueprint(
         formatted = re.sub(r"\s+\)", ")", formatted)
         return formatted
 
+    def _encode_group_token(name_key, quality, is_hevc, is_raw):
+        payload = {
+            "n": str(name_key or "").strip().lower(),
+            "q": str(quality or "").strip().upper(),
+            "h": 1 if is_hevc else 0,
+            "r": 1 if is_raw else 0,
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
     def generate_playlist(base_host, scheme):
         logger.info("Generating playlist.m3u from database...")
 
@@ -146,18 +158,24 @@ def create_playlist_blueprint(
         cursor = conn.cursor()
         portals = getPortals() or {}
 
+        settings = getSettings()
+        include_per_portal = bool(settings.get("playlist export per portal channels", True))
+        include_grouped = bool(settings.get("playlist export grouped channels", False))
+        if not include_per_portal and not include_grouped:
+            include_per_portal = True
+
         order_clause = ""
-        if getSettings().get("sort playlist by channel name", True):
+        if settings.get("sort playlist by channel name", True):
             order_clause = (
                 "ORDER BY COALESCE(NULLIF(c.custom_name, ''), NULLIF(c.auto_name, ''), c.name)"
             )
-        elif getSettings().get("use channel numbers", True):
-            if getSettings().get("sort playlist by channel number", False):
+        elif settings.get("use channel numbers", True):
+            if settings.get("sort playlist by channel number", False):
                 order_clause = (
                     "ORDER BY CAST(COALESCE(NULLIF(c.custom_number, ''), c.number) AS INTEGER)"
                 )
-        elif getSettings().get("use channel genres", True):
-            if getSettings().get("sort playlist by channel genre", False):
+        elif settings.get("use channel genres", True):
+            if settings.get("sort playlist by channel genre", False):
                 order_clause = (
                     "ORDER BY COALESCE(NULLIF(c.custom_genre, ''), c.genre)"
                 )
@@ -167,18 +185,19 @@ def create_playlist_blueprint(
             SELECT
                 c.portal_id as portal, c.channel_id, c.name, c.number, c.genre,
                 c.custom_name, c.auto_name, c.matched_name, c.custom_number, c.custom_genre, c.custom_epg_id,
-                c.is_event, c.country, c.resolution, c.video_codec
+                c.is_event, c.is_raw, c.country, c.resolution, c.video_codec
             FROM channels c
             LEFT JOIN groups g ON c.portal_id = g.portal_id AND c.genre_id = g.genre_id
             WHERE c.enabled = 1 AND {ACTIVE_GROUP_CONDITION}
             {order_clause}
             """
         )
+        rows = cursor.fetchall()
+        normalized = []
+        name_format = settings.get("playlist name format", "({prefix}) {name} ({suffix})")
 
-        for row in cursor.fetchall():
+        for row in rows:
             portal = row["portal"]
-            channel_id = row["channel_id"]
-
             channel_name = effective_display_name(
                 row["custom_name"], row["matched_name"], row["auto_name"], row["name"]
             )
@@ -190,20 +209,14 @@ def create_playlist_blueprint(
             epg_id = row["custom_epg_id"] if row["custom_epg_id"] else effective_epg_name(
                 row["custom_name"], row["auto_name"], row["name"]
             )
-
-            portal_code = ""
             portal_data = portals.get(portal, {})
-            if portal_data:
-                portal_code = str(portal_data.get("portal code", "")).strip().upper()
-                portal_code = re.sub(r"[^A-Z0-9]", "", portal_code)
-                if portal_code:
-                    portal_code = portal_code[:2]
-
+            portal_code = str(portal_data.get("portal code", "")).strip().upper() if portal_data else ""
+            portal_code = re.sub(r"[^A-Z0-9]", "", portal_code)[:2]
             country_code = _normalize_country_code(row["country"])
             quality = _normalize_quality(row["resolution"])
             is_hevc = _is_hevc(row["video_codec"])
             is_event = bool(row["is_event"])
-            name_format = getSettings().get("playlist name format", "({prefix}) {name} ({suffix})")
+            is_raw = bool(row["is_raw"])
             display_name = _format_display_name(
                 name_format,
                 name=channel_name,
@@ -213,10 +226,39 @@ def create_playlist_blueprint(
                 hevc=is_hevc,
                 event=is_event,
             )
+            name_key = str(channel_name or "").strip().lower()
+            group_key = None
+            if row["matched_name"] and name_key:
+                group_key = (name_key, quality, is_hevc, is_raw)
+            normalized.append(
+                {
+                    "portal": portal,
+                    "channel_id": row["channel_id"],
+                    "channel_name": channel_name,
+                    "channel_number": channel_number,
+                    "group_title": _normalize_group_title(genre or ""),
+                    "epg_id": epg_id,
+                    "country_code": country_code,
+                    "quality": quality,
+                    "is_hevc": is_hevc,
+                    "is_event": is_event,
+                    "is_raw": is_raw,
+                    "display_name": display_name,
+                    "group_key": group_key,
+                    "matched_name": row["matched_name"],
+                }
+            )
 
-            tvg_id = display_name if row["is_event"] else epg_id
-            tvg_name = display_name
-            group_title = _normalize_group_title(genre or "")
+        grouped_candidates = {}
+        for item in normalized:
+            if item["group_key"] is not None:
+                grouped_candidates.setdefault(item["group_key"], []).append(item)
+        grouped_keys = {
+            key for key, members in grouped_candidates.items() if len(members) > 1
+        }
+
+        def append_playlist_entry(item, stream_url):
+            group_title = item["group_title"]
             if group_title not in seen_groups:
                 seen_groups.add(group_title)
                 dummy_name = _clean_text(f"::: {group_title} :::")
@@ -240,27 +282,68 @@ def create_playlist_blueprint(
                 channels.append(dummy_entry)
                 channels.append(dummy_url)
 
-            title_text = _clean_text(f"{channel_number} {display_name}".strip())
+            tvg_id = item["display_name"] if item["is_event"] else item["epg_id"]
+            title_text = _clean_text(f"{item['channel_number']} {item['display_name']}".strip())
             channel_entry = (
                 "#EXTINF:-1"
                 + ' tvg-id="'
                 + _escape_m3u_attr(tvg_id)
                 + '"'
                 + ' tvg-name="'
-                + _escape_m3u_attr(tvg_name)
+                + _escape_m3u_attr(item["display_name"])
                 + '"'
                 + ' group-title="'
                 + _escape_m3u_attr(group_title)
                 + '",'
                 + title_text
             )
-
-            url = f"{scheme}://{base_host}/play/{portal}/{channel_id}?web=true"
-
             channels.append(channel_entry)
-            if row["is_event"]:
+            if item["is_event"]:
                 channels.append(f"#EXTGRP:{group_title or 'EVENTS'}")
-            channels.append(url)
+            channels.append(stream_url)
+
+        if include_grouped:
+            for key in grouped_keys:
+                members = grouped_candidates.get(key, [])
+                if not members:
+                    continue
+                representative = members[0]
+                any_event = any(m["is_event"] for m in members)
+                group_channel_number = next((m["channel_number"] for m in members if m["channel_number"]), "")
+                group_epg_id = next((m["epg_id"] for m in members if m["epg_id"]), "")
+                group_title = representative["group_title"]
+                grouped_display_name = _format_display_name(
+                    name_format,
+                    name=representative["channel_name"],
+                    country=representative["country_code"],
+                    portal_code="",
+                    quality=representative["quality"],
+                    hevc=representative["is_hevc"],
+                    event=any_event,
+                )
+                group_token = _encode_group_token(
+                    key[0], representative["quality"], representative["is_hevc"], representative["is_raw"]
+                )
+                item = {
+                    "channel_number": group_channel_number,
+                    "display_name": grouped_display_name,
+                    "is_event": any_event,
+                    "epg_id": group_epg_id,
+                    "group_title": group_title,
+                }
+                stream_url = f"{scheme}://{base_host}/play_group/{group_token}?web=true"
+                append_playlist_entry(item, stream_url)
+
+        if include_per_portal:
+            for item in normalized:
+                stream_url = f"{scheme}://{base_host}/play/{item['portal']}/{item['channel_id']}?web=true"
+                append_playlist_entry(item, stream_url)
+        else:
+            for item in normalized:
+                if item["group_key"] in grouped_keys:
+                    continue
+                stream_url = f"{scheme}://{base_host}/play/{item['portal']}/{item['channel_id']}?web=true"
+                append_playlist_entry(item, stream_url)
 
         conn.close()
 

@@ -78,6 +78,11 @@ class MiscState:
     create_misc_blueprint: Callable[..., Any]
     LOG_DIR: str
     occupied: Any
+    get_db_connection: Callable[[], Any]
+    getPortals: Callable[[], Any]
+    getSettings: Callable[[], Any]
+    recent_stream_history: Any
+    recent_failed_macs: Any
     refresh_custom_sources: Callable[..., Any]
     get_epg_source_status: Callable[..., Any]
 
@@ -119,6 +124,8 @@ class StreamingState:
     score_mac_for_selection: Callable[..., Any]
     occupied: Any
     hls_manager: Any
+    recent_stream_history: Any
+    recent_failed_macs: Any
 
 
 @dataclass

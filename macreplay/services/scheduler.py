@@ -196,3 +196,36 @@ def start_event_auto_create_scheduler(*, getSettings, logger, run_auto_create):
 
     threading.Thread(target=auto_create_loop, daemon=True).start()
     logger.info("Event auto-create scheduler started!")
+
+
+def start_xtream_logins_scheduler(*, getSettings, logger, refresh_xtream_logins):
+    """Start scheduler that refreshes Xtream login health/status."""
+
+    def xtream_login_loop():
+        while True:
+            try:
+                interval_min = float(
+                    getSettings().get("xtream login check interval minutes", 0) or 0
+                )
+                if interval_min <= 0:
+                    time.sleep(3600)
+                    continue
+
+                logger.info(
+                    "Xtream login scheduler: next run in %s minute(s)",
+                    interval_min,
+                )
+                time.sleep(max(60, int(interval_min * 60)))
+                result = refresh_xtream_logins() or {}
+                logger.info(
+                    "Xtream login scheduler: done (portals=%s, logins=%s, invalid=%s).",
+                    result.get("portals", 0),
+                    result.get("logins", 0),
+                    result.get("invalid", 0),
+                )
+            except Exception as exc:
+                logger.error("Xtream login scheduler error: %s", exc)
+                time.sleep(300)
+
+    threading.Thread(target=xtream_login_loop, daemon=True).start()
+    logger.info("Xtream login scheduler started!")
