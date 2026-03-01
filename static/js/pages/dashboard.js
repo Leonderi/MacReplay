@@ -59,6 +59,8 @@ function refreshDashboardStats() {
             renderTopMacDurations(stats.top_mac_durations || []);
             renderTopFailedMacs(stats.top_failed_macs || []);
             renderTopReliableChannels(stats.top_reliable_channels || []);
+            renderSpeedtest('proxy', stats.speedtest_proxy || null);
+            renderSpeedtest('direct', stats.speedtest_direct || null);
             setStatusBadge('statusEpgBadge', 'EPG', stats.status_epg);
             setStatusBadge('statusStreamingBadge', 'Streaming', stats.status_streaming || 'ok');
         })
@@ -88,8 +90,12 @@ function displayStreams(streams) {
             const channelName = escapeHtml(stream['channel name']);
             const sourcePortal = escapeHtml(stream['source portal name'] || '');
             const sourceChannel = escapeHtml(stream['source channel name'] || '');
+            const sourceTags = Array.isArray(stream['source tags']) ? stream['source tags'] : [];
+            const sourceTagHtml = sourceTags.length
+                ? `<div class="small mt-1">${sourceTags.map(t => `<span class="badge bg-secondary me-1">${escapeHtml(String(t))}</span>`).join('')}</div>`
+                : '';
             const sourceInfo = (sourcePortal || sourceChannel)
-                ? `<div class="small text-info">Source: ${sourcePortal || '-'} · ${sourceChannel || '-'}</div>`
+                ? `<div class="small text-info">Source: ${sourcePortal || '-'} · ${sourceChannel || '-'}</div>${sourceTagHtml}`
                 : '';
             const mac = escapeHtml(stream.mac);
             const client = escapeHtml(stream.client);
@@ -175,8 +181,12 @@ function renderRecentChannels(items) {
         const portal = escapeHtml(item.portal_name || '-');
         const sourcePortal = escapeHtml(item.source_portal_name || '');
         const sourceChannel = escapeHtml(item.source_channel_name || '');
+        const sourceTags = Array.isArray(item.source_tags) ? item.source_tags : [];
+        const sourceTagsHtml = sourceTags.length
+            ? `<div class="dashboard-recent-meta">${sourceTags.map(t => `<span class="badge bg-secondary me-1">${escapeHtml(String(t))}</span>`).join('')}</div>`
+            : '';
         const sourceLine = (sourcePortal || sourceChannel)
-            ? `<div class="dashboard-recent-meta">Source: ${sourcePortal || '-'} · ${sourceChannel || '-'}</div>`
+            ? `<div class="dashboard-recent-meta">Source: ${sourcePortal || '-'} · ${sourceChannel || '-'}</div>${sourceTagsHtml}`
             : '';
         const client = escapeHtml(item.client || '-');
         const started = formatTimestamp((item.start_time || 0) * 1000);
@@ -273,6 +283,112 @@ function renderTopReliableChannels(items) {
     }).join('');
 }
 
+function renderSpeedtest(mode, data) {
+    const key = mode === 'direct' ? 'Direct' : 'Proxy';
+    if (!data) {
+        setText(`speedtest${key}Line1`, 'IP: -');
+        setText(`speedtest${key}Line2`, 'Latency: -');
+        setText(`speedtest${key}Line3`, 'Download: -');
+        setText(`speedtest${key}Line4`, 'Updated: -');
+        return;
+    }
+
+    const normalizedIpInfo = normalizeIpCountry(data.public_ip, data.country_flag, data.country_code);
+    const ipPart = [normalizedIpInfo.flag, normalizedIpInfo.ip].filter(Boolean).join(' ').trim();
+    const latency = data.latency_ms ?? data.ip_lookup_ms ?? '-';
+    const download = data.download_mbps != null ? `${data.download_mbps} Mbps` : '-';
+    const provider = (data.provider_used || data.provider_requested || 'http').toUpperCase();
+    const updated = data.tested_at ? formatTimestamp((Number(data.tested_at) || 0) * 1000) : '-';
+    const status = data.ok ? 'OK' : `FAILED${data.message ? ` (${data.message})` : ''}`;
+
+    setText(`speedtest${key}Line1`, `IP: ${ipPart}`);
+    setText(`speedtest${key}Line2`, `Latency: ${latency} ms · ${data.country_name || '-'}`);
+    setText(`speedtest${key}Line3`, `Download: ${download} · ${provider} · ${status}`);
+    setText(`speedtest${key}Line4`, `Updated: ${updated}`);
+}
+
+function normalizeIpCountry(publicIp, countryFlag, countryCode) {
+    let ip = String(publicIp || '').trim();
+    let flag = normalizeCountryFlag(countryFlag, countryCode);
+    if (!flag && ip) {
+        const prefixed = ip.match(/^([A-Za-z]{2})\s+(.+)$/);
+        if (prefixed) {
+            flag = countryCodeToEmoji(prefixed[1]);
+            ip = prefixed[2].trim();
+        }
+    }
+    return {
+        flag: flag || '',
+        ip: ip || '-'
+    };
+}
+
+function normalizeCountryFlag(flag, countryCode) {
+    const raw = String(flag || '').trim();
+    if (raw) {
+        if (raw.length === 2 && /^[A-Za-z]{2}$/.test(raw)) {
+            return countryCodeToEmoji(raw);
+        }
+        return raw;
+    }
+    const code = String(countryCode || '').trim();
+    if (code.length === 2 && /^[A-Za-z]{2}$/.test(code)) {
+        return countryCodeToEmoji(code);
+    }
+    return '';
+}
+
+function countryCodeToEmoji(code) {
+    const cc = String(code || '').toUpperCase();
+    if (cc.length !== 2 || !/^[A-Z]{2}$/.test(cc)) return '';
+    return String.fromCodePoint(cc.charCodeAt(0) + 127397) + String.fromCodePoint(cc.charCodeAt(1) + 127397);
+}
+
+function runDashboardSpeedtest(mode) {
+    const btnId = mode === 'direct' ? 'btnRunDirectSpeedtest' : 'btnRunProxySpeedtest';
+    const button = document.getElementById(btnId);
+    if (button) button.disabled = true;
+    setSpeedtestRunning(mode, true);
+    fetch('/api/settings/speedtest/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode })
+    })
+        .then(async response => {
+            const payload = await response.json().catch(() => ({}));
+            if (payload && typeof payload === 'object') {
+                renderSpeedtest(mode, payload);
+            }
+            if (!response.ok || !payload.ok) {
+                throw new Error(payload.message || 'Speedtest failed');
+            }
+            showNotification(`Speedtest (${mode}) completed`, 'success', 2000);
+            return refreshDashboardStats();
+        })
+        .catch(error => {
+            renderSpeedtest(mode, {
+                ok: false,
+                mode,
+                message: error.message || String(error),
+                tested_at: Math.floor(Date.now() / 1000)
+            });
+            showNotification(`Speedtest (${mode}) failed: ${error.message || error}`, 'error', 4000);
+        })
+        .finally(() => {
+            setSpeedtestRunning(mode, false);
+            if (button) button.disabled = false;
+        });
+}
+
+function setSpeedtestRunning(mode, running) {
+    if (!running) return;
+    const key = mode === 'direct' ? 'Direct' : 'Proxy';
+    setText(`speedtest${key}Line1`, 'IP: Testing...');
+    setText(`speedtest${key}Line2`, 'Latency: Testing...');
+    setText(`speedtest${key}Line3`, 'Download: Testing...');
+    setText(`speedtest${key}Line4`, 'Updated: Running...');
+}
+
 function refreshLineup() {
     fetch('/refresh_lineup', { method: 'POST' })
         .then(response => response.json())
@@ -335,6 +451,10 @@ function initializeDashboard() {
     if (xmltvUrlEl) xmltvUrlEl.value = `${baseUrl}/xmltv`;
     if (playlistUrlEl) playlistUrlEl.value = `${baseUrl}/playlist.m3u`;
     if (lastUpdatedEl) lastUpdatedEl.textContent = new Date().toLocaleString();
+    const proxyBtn = document.getElementById('btnRunProxySpeedtest');
+    const directBtn = document.getElementById('btnRunDirectSpeedtest');
+    if (proxyBtn) proxyBtn.addEventListener('click', () => runDashboardSpeedtest('proxy'));
+    if (directBtn) directBtn.addEventListener('click', () => runDashboardSpeedtest('direct'));
 
     // Initial load
     refreshStreams();

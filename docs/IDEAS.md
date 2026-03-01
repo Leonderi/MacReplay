@@ -26,12 +26,19 @@ Eine Sammlung von Verbesserungsvorschlägen und Feature-Ideen für zukünftige E
 - ✅ Widget: Stream-Dauer pro MAC (nur aktive Streams)
 - ✅ Widget: Most Failed MACs (24h)
 - ✅ Widget: Most Reliable Channels (24h, basierend auf Erfolgsquote)
+- ✅ Widget: Letzter Speedtest (Proxy + Direct) inkl. IP/Land/Latenz/Download + manueller Test-Button
+- ✅ Periodischer Speedtest per zentralem Settings-Intervall + Provider-Auswahl (HTTP/Ookla falls installiert)
 - ✅ Persistente Dashboard-Statistiken (24h Auswertung über DB-Events)
 - ✅ Aktive Event-Streams zeigen Original-Quelle (Portal + Channel) im Dashboard
+- ✅ Dashboard zeigt Tags des Original-Channels bei Event-Streams
 - ✅ Grouped-Play Stabilisierung: EOF-Backoff pro Portal/Channel mit exponentiellem Retry-Abstand
 - ✅ Persistenter Stream-Backoff (Channel+Portal) für stabileres Failover nach Neustarts
 - ✅ Grouped-Play Ranking berücksichtigt EOF-Historie (24h/30m), um instabile Kandidaten später zu probieren
 - ✅ Health-basiertes Ranking mit längerem Fenster (konfigurierbar): stabile Portale/MACs/Channels werden upgevotet, fehlerhafte downgevotet
+- ✅ Grouped-Play Ranking berücksichtigt Portal/Channel-Startlatenz (time-to-first-chunk)
+- ✅ Background-Check für Stalker-MACs (Intervall in Settings), abgelaufene/unerreichbare MACs werden markiert und beim Streamen übersprungen
+- ✅ Globaler Proxy (optional/forciert) für Portal-Anfragen + Proxy-Test (öffentliche IP + Download-Probe)
+- ✅ Streamstart optimiert: cached `cmd/link` wird bevorzugt, `getAllChannels` nur noch bei Bedarf/Forced Refresh
 
 ### Suche & Filter
 - ⬜ Globale Suche über Portale, MACs und Channels
@@ -100,6 +107,7 @@ patterns = {
 - ✅ Settings neu strukturieren (Side-Nav + mehrere Seiten, klare Sektionen)
 - ⬜ Settings: Globale Portal-Defaults in Settings, Portal-Verwaltung bleibt in `/portals`
 - ✅ Kompakte Ansicht für Channel-Liste
+- ✅ Editor zeigt nur Channels aus aktivierten Portalen
 - ✅ Editor: Aufklappbare Subline mit Match-Details + EPG-ID Edit
 - ✅ Editor: Logo aus Match in Subline (nur wenn gematched)
 - ✅ Editor: Nummer-Spalte vor Name, EPG-ID aus Hauptzeile entfernt
@@ -108,6 +116,7 @@ patterns = {
 - ✅ Editor: EPG-Refresh für geänderte EPG-IDs nach Save
 - ⬜ Editor: Subline Inhalte konfigurierbar (ein-/ausblenden)
 - 🔄 Editor: Gruppierung gleicher Channels (Match + Tags) + Bulk-Edit für Gruppe
+  - ✅ Event-Channels werden auch ohne `matched_name` gruppiert
 
 ### Tagging & Name Normalisierung
 - ✅ Auto-Normalisierung pro Portal (optional)
@@ -299,6 +308,7 @@ Die Stalker Portal API liefert via `?type=stb&action=get_profile` zusätzliche I
 - ⬜ Kein EPG für Event-Channels nötig (Name = Info)
 - ✅ Konfigurierbare Regeln (welche Channels, welche Event-Typen)
 - ✅ Automatische Löschung nach Event-Ende
+- ✅ Beim Deaktivieren eines Portals werden dessen Event-Channels automatisch deaktiviert
 
 ### Event-Channels (ESPN)
 - 🔄 ESPN-Provider: Sport/Liga-Auswahl, Upcoming-Events, Output-Template, Preview

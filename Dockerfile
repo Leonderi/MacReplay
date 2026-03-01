@@ -4,11 +4,25 @@ FROM python:3.11-slim AS base
 # Set working directory
 WORKDIR /app
 
+# Optional build toggle for Ookla speedtest CLI
+ARG INSTALL_OOKLA=false
+ENV INSTALL_OOKLA=${INSTALL_OOKLA}
+
 # Install system dependencies including ffmpeg and curl for health checks
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        curl \
+        ca-certificates \
+        gnupg \
+        apt-transport-https; \
+    if [ "${INSTALL_OOKLA}" = "true" ]; then \
+        curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends speedtest; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
 
 # Create directories for data persistence
 RUN mkdir -p /app/data /app/logs

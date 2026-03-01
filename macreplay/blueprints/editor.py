@@ -23,6 +23,14 @@ def _extract_country_from_group_name(group_name):
     return code.upper()
 
 
+def _to_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def create_editor_blueprint(
     *,
     logger,
@@ -88,6 +96,11 @@ def create_editor_blueprint(
             conn = get_db_connection()
             cursor = conn.cursor()
             portals = getPortals() or {}
+            enabled_portal_ids = [
+                str(portal_id)
+                for portal_id, portal_cfg in portals.items()
+                if _to_bool((portal_cfg or {}).get("enabled", True))
+            ]
 
             epg_channel_map = get_epg_channel_map()
             epg_channels = set(epg_channel_map.keys())
@@ -96,6 +109,13 @@ def create_editor_blueprint(
                 LEFT JOIN groups g ON c.portal_id = g.portal_id AND c.genre_id = g.genre_id
                 WHERE {ACTIVE_GROUP_CONDITION}"""
             params = []
+
+            if enabled_portal_ids:
+                placeholders = ",".join(["?"] * len(enabled_portal_ids))
+                base_query += f" AND c.portal_id IN ({placeholders})"
+                params.extend(enabled_portal_ids)
+            else:
+                base_query += " AND 1 = 0"
 
             if portal_filter:
                 portal_values = [p.strip() for p in portal_filter.split(",") if p.strip()]
@@ -506,9 +526,13 @@ def create_editor_blueprint(
                 raw_key = "raw" if item.get("isRaw") else ""
                 return (name_key, resolution_key, hevc_key, raw_key)
 
+            def _is_group_candidate(item):
+                # Event-channels should be groupable even if they don't have a channelsdvr matchedName.
+                return bool(item.get("matchedName")) or bool(item.get("isEvent"))
+
             candidates = {}
             for item in channels:
-                if item.get("matchedName"):
+                if _is_group_candidate(item):
                     candidates.setdefault(_group_key(item), []).append(item)
 
             grouped_rows = []
@@ -516,7 +540,7 @@ def create_editor_blueprint(
             genre_updates = []
             epg_updates = []
             for item in channels:
-                if item.get("matchedName"):
+                if _is_group_candidate(item):
                     key = _group_key(item)
                     items = candidates.get(key, [])
                     if len(items) > 1:
@@ -633,14 +657,29 @@ def create_editor_blueprint(
 
             conn = get_db_connection()
             cursor = conn.cursor()
+            portals = getPortals() or {}
+            enabled_portal_ids = [
+                str(portal_id)
+                for portal_id, portal_cfg in portals.items()
+                if _to_bool((portal_cfg or {}).get("enabled", True))
+            ]
 
+            if not enabled_portal_ids:
+                payload = {"portals": []}
+                filter_cache.set(cache_key, payload)
+                conn.close()
+                return flask.jsonify(payload)
+
+            placeholders = ",".join(["?"] * len(enabled_portal_ids))
             cursor.execute(
-                """
+                f"""
                 SELECT DISTINCT portal_name
                 FROM channels
                 WHERE portal_name IS NOT NULL AND portal_name != ''
+                  AND portal_id IN ({placeholders})
                 ORDER BY portal_name
-                """
+                """,
+                enabled_portal_ids,
             )
 
             portals = [row["portal_name"] for row in cursor.fetchall()]

@@ -13,6 +13,7 @@ import hashlib
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 try:
     import lxml.etree as ET
     LXML_AVAILABLE = True
@@ -33,6 +34,8 @@ from macreplay.config import (
     getPortals,
     savePortals,
     getSettings,
+    saveSettings,
+    get_effective_proxy,
 )
 from macreplay.db import get_db_connection, init_db
 from macreplay.blueprints.settings import create_settings_blueprint
@@ -62,7 +65,10 @@ from macreplay.services.scheduler import (
     start_event_channel_cleanup_scheduler,
     start_event_auto_create_scheduler,
     start_xtream_logins_scheduler,
+    start_stalker_macs_scheduler,
+    start_speedtest_scheduler,
 )
+from macreplay.services.speedtest import run_speedtest
 logger = setup_logging(LOG_DIR)
 
 # Group filter: include ungrouped channels only when no groups are active for a portal.
@@ -1619,6 +1625,40 @@ def normalize_mac_data(mac_value):
     return {"expiry": "Unknown", "watchdog_timeout": 0, "playback_limit": 0}
 
 
+def parse_mac_expiry_utc(expiry_value):
+    text = str(expiry_value or "").strip()
+    if not text or text.lower() in {"unknown", "none", "n/a", "-"}:
+        return None
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        pass
+    for fmt in (
+        "%B %d, %Y, %I:%M %p",
+        "%B %d, %Y, %I:%M:%S %p",
+        "%b %d, %Y, %I:%M %p",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+    ):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+    try:
+        dt = parsedate_to_datetime(text)
+        if dt and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc) if dt else None
+    except Exception:
+        return None
+
+
 DEFAULT_COUNTRY_CODES = {
     "AF", "AL", "ALB", "AR", "AT", "AU", "BE", "BG", "BR", "CA", "CH", "CN", "CZ",
     "DE", "DK", "EE", "ES", "FI", "FR", "GR", "HK", "HR", "HU", "IE", "IL",
@@ -2626,6 +2666,11 @@ def score_mac_for_selection(mac, mac_data, occupied_list, streams_per_mac):
     - Rückgabe -1 wenn MAC nicht verfügbar (alle Slots belegt)
     """
     data = normalize_mac_data(mac_data)
+    expiry_dt = parse_mac_expiry_utc(data.get("expiry"))
+    if expiry_dt and expiry_dt <= datetime.now(timezone.utc):
+        return -1
+    if isinstance(mac_data, dict) and bool(mac_data.get("auth_error")):
+        return -1
     score = 0
 
     # Zähle aktuelle Streams auf dieser MAC
@@ -3064,7 +3109,7 @@ hls_manager = HLSStreamManager(max_streams=10, inactive_timeout=30)
 def fetch_xtream_channels(portal_id, portal):
     portal_name = portal["name"]
     url = portal["url"]
-    proxy = portal.get("proxy", "")
+    proxy = get_effective_proxy(portal.get("proxy", ""), getSettings())
     logins = portal.get("xtream logins") if isinstance(portal.get("xtream logins"), list) else []
     username = ""
     password = ""
@@ -3143,7 +3188,7 @@ def fetch_portal_channels(portal_id, portal):
     portal_name = portal["name"]
     url = portal["url"]
     macs = list(portal["macs"].keys())
-    proxy = portal["proxy"]
+    proxy = get_effective_proxy(portal.get("proxy", ""), getSettings())
 
     logger.info(f"Fetching channels for portal: {portal_name}")
 
@@ -3716,7 +3761,7 @@ def refresh_xmltv():
 
         url = portal["url"]
         macs = list(portal["macs"].keys())
-        proxy = portal.get("proxy", "")
+        proxy = get_effective_proxy(portal.get("proxy", ""), settings)
 
         epg = None
         if fetch_epg:
@@ -3795,7 +3840,7 @@ def refresh_xmltv_for_portal(portal_id):
     fetch_epg = portal.get("fetch epg", True)
     portal_epg_offset = int(portal.get("epg offset", 0))
     url = portal.get("url", "")
-    proxy = portal.get("proxy", "")
+    proxy = get_effective_proxy(portal.get("proxy", ""), settings)
     portal_type = portal.get("type", "stalker")
     macs = list(portal.get("macs", {}).keys())
 
@@ -4188,7 +4233,7 @@ def refresh_xtream_logins_tick():
                 portal.get("url", ""),
                 username,
                 password,
-                proxy=portal.get("proxy", ""),
+                proxy=get_effective_proxy(portal.get("proxy", ""), getSettings()),
                 user_agent=portal.get("xtream user agent", ""),
             )
 
@@ -4239,6 +4284,145 @@ def refresh_xtream_logins_tick():
         filter_cache.clear()
 
     return {"portals": portal_count, "logins": login_count, "invalid": invalid_count}
+
+
+def refresh_stalker_macs_tick():
+    portals = getPortals()
+    changed = False
+    portal_count = 0
+    mac_count = 0
+    expired_count = 0
+    unreachable_count = 0
+
+    now_utc = datetime.now(timezone.utc)
+    settings = getSettings()
+
+    for portal_id, portal in portals.items():
+        if portal.get("type", "stalker") != "stalker":
+            continue
+        if not bool(portal.get("enabled", True)):
+            continue
+        macs = portal.get("macs")
+        if not isinstance(macs, dict) or not macs:
+            continue
+
+        portal_count += 1
+        portal_proxy = get_effective_proxy(portal.get("proxy", ""), settings)
+        portal_url = portal.get("url", "")
+        updated_macs = {}
+        portal_changed = False
+
+        for mac, mac_data in macs.items():
+            mac_count += 1
+            existing = normalize_mac_data(mac_data)
+            merged = dict(existing)
+            merged["auth_error"] = False
+            merged["status"] = "OK"
+            merged["status_code"] = None
+
+            token = stb.getToken(portal_url, mac, portal_proxy)
+            if not token:
+                merged["auth_error"] = True
+                merged["status"] = "UNREACHABLE"
+                merged["status_code"] = 0
+                unreachable_count += 1
+            else:
+                profile = stb.getProfile(portal_url, mac, token, portal_proxy) or {}
+                expiry = stb.getExpires(portal_url, mac, token, portal_proxy)
+                if expiry:
+                    merged["expiry"] = expiry
+                merged["watchdog_timeout"] = profile.get(
+                    "watchdog_timeout", merged.get("watchdog_timeout", 0)
+                ) or 0
+                merged["playback_limit"] = profile.get(
+                    "playback_limit", merged.get("playback_limit", 0)
+                ) or 0
+
+            expiry_dt = parse_mac_expiry_utc(merged.get("expiry"))
+            if expiry_dt and expiry_dt <= now_utc:
+                merged["auth_error"] = True
+                merged["status"] = "EXPIRED"
+                merged["status_code"] = 498
+                expired_count += 1
+
+            updated_macs[mac] = merged
+            if merged != mac_data:
+                portal_changed = True
+
+        if portal_changed:
+            portals[portal_id]["macs"] = updated_macs
+            changed = True
+
+    if changed:
+        savePortals(portals)
+        filter_cache.clear()
+
+    return {
+        "portals": portal_count,
+        "macs": mac_count,
+        "expired": expired_count,
+        "unreachable": unreachable_count,
+    }
+
+
+def run_speedtests_tick():
+    settings = getSettings()
+    provider = str(settings.get("speedtest provider", "http") or "http").strip().lower()
+    effective_proxy = get_effective_proxy("", settings)
+
+    results = {}
+
+    if effective_proxy:
+        try:
+            proxy_result = run_speedtest(
+                proxy_url=effective_proxy,
+                use_proxy=True,
+                provider=provider,
+            )
+        except Exception as exc:
+            proxy_result = {
+                "ok": False,
+                "mode": "proxy",
+                "provider_requested": provider,
+                "provider_used": provider,
+                "proxy": effective_proxy,
+                "message": str(exc),
+                "tested_at": int(time.time()),
+            }
+        settings["speedtest last proxy result"] = proxy_result
+        results["proxy"] = proxy_result
+    else:
+        results["proxy"] = {
+            "ok": False,
+            "mode": "proxy",
+            "provider_requested": provider,
+            "provider_used": provider,
+            "proxy": "",
+            "message": "No proxy configured/effective",
+            "tested_at": int(time.time()),
+        }
+
+    try:
+        direct_result = run_speedtest(
+            proxy_url="",
+            use_proxy=False,
+            provider=provider,
+        )
+    except Exception as exc:
+        direct_result = {
+            "ok": False,
+            "mode": "direct",
+            "provider_requested": provider,
+            "provider_used": provider,
+            "proxy": "",
+            "message": str(exc),
+            "tested_at": int(time.time()),
+        }
+
+    settings["speedtest last direct result"] = direct_result
+    results["direct"] = direct_result
+    saveSettings(settings)
+    return results
 
 
 def start_refresh():
@@ -4297,6 +4481,16 @@ def start_refresh():
         getSettings=getSettings,
         logger=logger,
         refresh_xtream_logins=refresh_xtream_logins_tick,
+    )
+    start_stalker_macs_scheduler(
+        getSettings=getSettings,
+        logger=logger,
+        refresh_stalker_macs=refresh_stalker_macs_tick,
+    )
+    start_speedtest_scheduler(
+        getSettings=getSettings,
+        logger=logger,
+        run_speedtests=run_speedtests_tick,
     )
 
 

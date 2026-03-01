@@ -9,10 +9,11 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from flask import Blueprint, Response, make_response, redirect, request, send_file
+from flask import Blueprint, Response, current_app, make_response, redirect, request, send_file
 
 import stb
 from macreplay import xtream
+from macreplay.config import get_effective_proxy
 
 
 def create_streaming_blueprint(
@@ -34,6 +35,7 @@ def create_streaming_blueprint(
     portal_ttl_state = {}
     xtream_portal_backoff_until = {}
     eof_backoff_cache = {}
+    force_channel_lookup = set()
     _state_lock = threading.Lock()
 
     def _portal_ttl_bounds(portal):
@@ -135,6 +137,18 @@ def create_streaming_blueprint(
     def _invalidate_cached_direct_link(portal_id, channel_id):
         with _state_lock:
             direct_link_cache.pop((portal_id, channel_id), None)
+
+    def _mark_force_channel_lookup(portal_id, channel_id):
+        with _state_lock:
+            force_channel_lookup.add((str(portal_id), str(channel_id)))
+
+    def _should_force_channel_lookup(portal_id, channel_id):
+        with _state_lock:
+            return (str(portal_id), str(channel_id)) in force_channel_lookup
+
+    def _clear_force_channel_lookup(portal_id, channel_id):
+        with _state_lock:
+            force_channel_lookup.discard((str(portal_id), str(channel_id)))
 
     def _is_auth_error(stderr_lines):
         if not stderr_lines:
@@ -339,6 +353,13 @@ def create_streaming_blueprint(
             return link.replace(".m3u8", ".ts")
         return link
 
+    def _extract_cmd_url(cmd):
+        text = str(cmd or "").strip()
+        if not text:
+            return ""
+        parts = text.split()
+        return parts[-1] if parts else text
+
     def remember_recent_stream(*, portal_name, channel_name, client, start_time=None):
         if recent_stream_history is None:
             return
@@ -488,10 +509,18 @@ def create_streaming_blueprint(
             source_portal_id = str(row["source_portal_id"] or "").strip()
             source_channel_id = str(row["source_channel_id"] or "").strip()
             source_name = None
+            source_tags = []
             if source_portal_id and source_channel_id:
                 source_row = cur.execute(
                     """
-                    SELECT COALESCE(NULLIF(custom_name, ''), NULLIF(matched_name, ''), NULLIF(auto_name, ''), name) AS display_name
+                    SELECT
+                        COALESCE(NULLIF(custom_name, ''), NULLIF(matched_name, ''), NULLIF(auto_name, ''), name) AS display_name,
+                        UPPER(COALESCE(resolution, '')) AS resolution,
+                        LOWER(COALESCE(video_codec, '')) AS video_codec,
+                        COALESCE(is_event, 0) AS is_event,
+                        COALESCE(is_header, 0) AS is_header,
+                        COALESCE(is_raw, 0) AS is_raw,
+                        COALESCE(matched_name, '') AS matched_name
                     FROM channels
                     WHERE portal_id = ? AND channel_id = ?
                     LIMIT 1
@@ -500,6 +529,20 @@ def create_streaming_blueprint(
                 ).fetchone()
                 if source_row:
                     source_name = source_row["display_name"]
+                    resolution = str(source_row["resolution"] or "").strip().upper()
+                    if resolution in {"SD", "HD", "FHD", "UHD", "4K"}:
+                        source_tags.append(resolution)
+                    codec = str(source_row["video_codec"] or "").lower()
+                    if "hevc" in codec or "h265" in codec:
+                        source_tags.append("HEVC")
+                    if bool(source_row["is_event"]):
+                        source_tags.append("EVENT")
+                    if bool(source_row["is_header"]):
+                        source_tags.append("HEADER")
+                    if bool(source_row["is_raw"]):
+                        source_tags.append("RAW")
+                    if str(source_row["matched_name"] or "").strip():
+                        source_tags.append("MATCH")
             conn.close()
             source_portal_name = (
                 (getPortals() or {}).get(source_portal_id, {}).get("name")
@@ -511,6 +554,7 @@ def create_streaming_blueprint(
                 "source_channel_id": source_channel_id,
                 "source_channel_name": source_name or source_channel_id or "",
                 "source_portal_name": source_portal_name or source_portal_id or "",
+                "source_tags": source_tags,
             }
         except Exception:
             return None
@@ -525,7 +569,7 @@ def create_streaming_blueprint(
         portalName = portal.get("name")
         url = portal.get("url")
         streamsPerMac = int(portal.get("streams per mac"))
-        proxy = portal.get("proxy")
+        proxy = get_effective_proxy(portal.get("proxy"), getSettings())
         portal_type = portal.get("type", "stalker")
         portal_user_agent = (portal.get("xtream user agent", "") or "").strip()
         if portal_type == "xtream" and not portal_user_agent:
@@ -550,6 +594,7 @@ def create_streaming_blueprint(
             occupied_item = None
             session_id = None
             first_chunk_seen = False
+            startup_ms = None
             exit_reason = "unknown"
             ffmpeg_rc = None
             stderr_buffer = []
@@ -584,6 +629,7 @@ def create_streaming_blueprint(
                         occupied_item["source portal name"] = event_source_info.get("source_portal_name")
                         occupied_item["source channel id"] = event_source_info.get("source_channel_id")
                         occupied_item["source channel name"] = event_source_info.get("source_channel_name")
+                        occupied_item["source tags"] = event_source_info.get("source_tags") or []
                     occupied.get(portalId, []).append(occupied_item)
                     logger.info(
                         "Occupied Portal({} | {}):MAC({})".format(portalName, portalId, mac)
@@ -636,10 +682,10 @@ def create_streaming_blueprint(
                         cursor.execute(
                             """
                             UPDATE stream_sessions
-                            SET ended_at = ?, duration_sec = ?
+                            SET ended_at = ?, duration_sec = ?, startup_ms = COALESCE(startup_ms, ?)
                             WHERE id = ?
                             """,
-                            [end_ts, duration, session_id],
+                            [end_ts, duration, startup_ms, session_id],
                         )
                         conn.commit()
                         conn.close()
@@ -667,13 +713,17 @@ def create_streaming_blueprint(
                         if rc not in (None, 0):
                             exit_reason = "ffmpeg_error"
                             logger.info("Ffmpeg closed with error(%s) for Portal(%s)", str(rc), portalName)
+                            auth_fail = False
                             with stderr_lock:
                                 if stderr_buffer:
                                     logger.info(
                                         "Ffmpeg stderr tail: %s", " | ".join(stderr_buffer[-8:])
                                     )
+                                    auth_fail = _is_auth_error(stderr_buffer[-8:])
+                            if portal_type == "stalker" and auth_fail:
+                                # Force one fresh channel lookup on next request to refresh cmd/link.
+                                _mark_force_channel_lookup(portalId, channelId)
                             if portal_type == "stalker" and result and result.get("used_cached_link"):
-                                auth_fail = _is_auth_error(stderr_buffer[-8:])
                                 if auth_fail:
                                     _invalidate_cached_direct_link(portalId, channelId)
                                     _record_ttl_outcome(portalId, portal, "auth_fail")
@@ -692,7 +742,9 @@ def create_streaming_blueprint(
                         else:
                             exit_reason = "stream_eof"
                         break
-                    first_chunk_seen = True
+                    if not first_chunk_seen:
+                        first_chunk_seen = True
+                        startup_ms = max(0, int((time.time() - float(startTime)) * 1000))
                     if portal_type == "stalker" and result and result.get("used_cached_link"):
                         _record_ttl_outcome(portalId, portal, "success")
                         result["used_cached_link"] = False
@@ -926,7 +978,14 @@ def create_streaming_blueprint(
             mac_scores.append((mac, score))
 
         mac_scores.sort(key=lambda x: (x[1] >= 0, x[1]), reverse=True)
-        macs = [m[0] for m in mac_scores if m[1] >= 0] or list(macs_dict.keys())
+        macs = [m[0] for m in mac_scores if m[1] >= 0]
+        if not macs:
+            logger.warning(
+                "No eligible MACs for Portal(%s):Channel(%s) after health/expiry filtering",
+                portalId,
+                channelId,
+            )
+            return make_response("No valid MAC available", 503)
 
         if available_macs:
             valid_available = [m for m in macs if m in available_macs]
@@ -968,24 +1027,22 @@ def create_streaming_blueprint(
                 )
                 used_cached_link = False
                 runtime_cached_link = _get_cached_direct_link(portalId, channelId, portal)
-                runtime_cache_miss = runtime_cached_link is None
+                force_lookup = _should_force_channel_lookup(portalId, channelId)
 
                 if cached_cmd:
                     cmd = cached_cmd
                     logger.debug(f"Using cached cmd for channel {channelId}")
 
-                # For direct URL channels, refresh cmd when runtime cache expired/missing.
-                # This prevents long-lived stale play_token links from DB.
-                needs_fresh_channel_lookup = (
-                    not cmd
-                    or ("http://localhost/" not in str(cmd) and runtime_cache_miss)
-                )
+                # Prefer cached cmd/link path; only refresh full channel list when missing
+                # (or explicitly forced after auth-like errors).
+                needs_fresh_channel_lookup = (not cmd) or force_lookup
 
                 if needs_fresh_channel_lookup:
                     logger.debug(
-                        "Fetching all channels for MAC %s (needs_fresh=%s)",
+                        "Fetching all channels for MAC %s (needs_fresh=%s force=%s)",
                         mac_to_test,
                         needs_fresh_channel_lookup,
+                        force_lookup,
                     )
                     channels = stb.getAllChannels(url, mac_to_test, token, proxy)
                     if channels:
@@ -1004,6 +1061,8 @@ def create_streaming_blueprint(
                                     break
                             if cmd:
                                 break
+                    if cmd:
+                        _clear_force_channel_lookup(portalId, channelId)
 
                 if not cmd:
                     return None
@@ -1015,7 +1074,7 @@ def create_streaming_blueprint(
                         link = runtime_cached_link
                         used_cached_link = True
                     else:
-                        link = cmd.split(" ")[1]
+                        link = _extract_cmd_url(cmd)
                         if link:
                             _set_cached_direct_link(portalId, channelId, portal, link)
 
@@ -1289,6 +1348,8 @@ def create_streaming_blueprint(
             success_count = 0
             portal_success_count = 0
             portal_fail_count = 0
+            channel_startup_ms = None
+            portal_startup_ms = None
             try:
                 success_count = cursor.execute(
                     """
@@ -1320,10 +1381,41 @@ def create_streaming_blueprint(
                     """,
                     [portal_id, cutoff_ts],
                 ).fetchone()["cnt"]
+                startup_row = cursor.execute(
+                    """
+                    SELECT AVG(startup_ms) AS avg_startup_ms
+                    FROM stream_sessions
+                    WHERE portal_id = ?
+                      AND channel_id = ?
+                      AND started_at >= ?
+                      AND startup_ms IS NOT NULL
+                      AND startup_ms >= 0
+                    """,
+                    [portal_id, channel_id, cutoff_ts],
+                ).fetchone()
+                if startup_row and startup_row["avg_startup_ms"] is not None:
+                    channel_startup_ms = int(float(startup_row["avg_startup_ms"]))
+                portal_startup_row = cursor.execute(
+                    """
+                    SELECT AVG(startup_ms) AS avg_startup_ms
+                    FROM stream_sessions
+                    WHERE portal_id = ?
+                      AND started_at >= ?
+                      AND startup_ms IS NOT NULL
+                      AND startup_ms >= 0
+                    """,
+                    [portal_id, cutoff_ts],
+                ).fetchone()
+                if portal_startup_row and portal_startup_row["avg_startup_ms"] is not None:
+                    portal_startup_ms = int(float(portal_startup_row["avg_startup_ms"]))
             except Exception:
                 success_count = 0
                 portal_success_count = 0
                 portal_fail_count = 0
+                channel_startup_ms = None
+                portal_startup_ms = None
+            channel_latency_penalty = min(180, int(channel_startup_ms / 20)) if channel_startup_ms is not None else 0
+            portal_latency_penalty = min(120, int(portal_startup_ms / 30)) if portal_startup_ms is not None else 0
             score = (
                 1000
                 - (int(fail_count) * 50)
@@ -1335,6 +1427,8 @@ def create_streaming_blueprint(
                 - (int(active_streams) * 5)
                 - int(min(600, max(0, eof_backoff_remaining)))
                 - int(min(900, max(0, portal_backoff_remaining)))
+                - channel_latency_penalty
+                - portal_latency_penalty
             )
             scored.append(
                 (
@@ -1347,6 +1441,8 @@ def create_streaming_blueprint(
                     int(success_count),
                     int(portal_success_count),
                     int(portal_fail_count),
+                    channel_startup_ms,
+                    portal_startup_ms,
                 )
             )
         conn.close()
@@ -1368,17 +1464,34 @@ def create_streaming_blueprint(
                     "success": success_count,
                     "portal_success": portal_success,
                     "portal_eof": portal_eof,
+                    "startup_ms": channel_start_ms,
+                    "portal_startup_ms": portal_start_ms,
                 }
-                for s, r, eof_backoff_s, portal_backoff_s, eof_24h, eof_30m, success_count, portal_success, portal_eof in scored[:3]
+                for s, r, eof_backoff_s, portal_backoff_s, eof_24h, eof_30m, success_count, portal_success, portal_eof, channel_start_ms, portal_start_ms in scored[:3]
             ],
         )
 
         web = bool(request.args.get("web"))
+        web_raw = request.args.get("web")
+        client_ip = request.remote_addr
+        app_obj = current_app._get_current_object()
+
+        def _call_channel_for_group(row):
+            # grouped_stream runs while iterating the response body; at that point the
+            # original request context may be gone. Recreate a minimal context per call.
+            query = ""
+            if web_raw:
+                query = "?web=" + str(web_raw)
+            path = f"/play/{row['portal_id']}/{row['channel_id']}{query}"
+            with app_obj.test_request_context(
+                path, environ_base={"REMOTE_ADDR": client_ip}
+            ):
+                return channel(row["portal_id"], row["channel_id"])
 
         # Keep non-web behavior unchanged (redirect/direct mode).
         if not web:
-            for _, row, _, _, _, _, _, _, _ in scored:
-                response = channel(row["portal_id"], row["channel_id"])
+            for _, row, _, _, _, _, _, _, _, _, _ in scored:
+                response = _call_channel_for_group(row)
                 portal_cfg = (getPortals() or {}).get(row["portal_id"]) or {}
                 if (
                     portal_cfg.get("type", "stalker") == "xtream"
@@ -1410,8 +1523,8 @@ def create_streaming_blueprint(
 
         first_response = None
         first_idx = None
-        for idx, (_, row, _, _, _, _, _, _, _) in enumerate(scored, start=1):
-            response = channel(row["portal_id"], row["channel_id"])
+        for idx, (_, row, _, _, _, _, _, _, _, _, _) in enumerate(scored, start=1):
+            response = _call_channel_for_group(row)
             portal_cfg = (getPortals() or {}).get(row["portal_id"]) or {}
             status = getattr(response, "status_code", 200)
             if (
@@ -1435,13 +1548,13 @@ def create_streaming_blueprint(
             return make_response("No streams available for group", 503)
 
         def grouped_stream():
-            for idx, (_, row, _, _, _, _, _, _, _) in enumerate(scored, start=1):
+            for idx, (_, row, _, _, _, _, _, _, _, _, _) in enumerate(scored, start=1):
                 if idx == first_idx:
                     response = first_response
                 elif idx < first_idx:
                     continue
                 else:
-                    response = channel(row["portal_id"], row["channel_id"])
+                    response = _call_channel_for_group(row)
                 if idx != first_idx:
                     portal_cfg = (getPortals() or {}).get(row["portal_id"]) or {}
                     status = getattr(response, "status_code", 200)
@@ -1495,7 +1608,7 @@ def create_streaming_blueprint(
         portalName = portal.get("name")
         url = portal.get("url")
         macs = list(portal["macs"].keys())
-        proxy = portal.get("proxy")
+        proxy = get_effective_proxy(portal.get("proxy"), getSettings())
         portal_type = portal.get("type", "stalker")
         portal_user_agent = (portal.get("xtream user agent", "") or "").strip()
         if portal_type == "xtream" and not portal_user_agent:

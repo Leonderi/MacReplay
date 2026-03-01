@@ -1700,11 +1700,33 @@ def create_events_blueprint(
                             last_space = True
                 return " ".join("".join(cleaned).split())
 
-            _stop_tokens = {"fc", "sc", "sv", "vfb", "vfl", "tsg", "rb", "fsv", "1", "2", "3", "04", "05", "07", "09", "1860", "1899"}
+            _stop_tokens = {"fc", "sc", "sv", "tsv", "vfb", "vfl", "tsg", "rb", "fsv", "1", "2", "3", "04", "05", "07", "09", "1860", "1899"}
 
             def _tokenize_name(value):
                 tokens = _normalize_text(value).split()
                 return {t for t in tokens if len(t) >= 3 and t not in _stop_tokens}
+
+            def _fallback_aliases(name):
+                raw = str(name or "").strip()
+                if not raw:
+                    return []
+                normalized_parts = _normalize_text(raw).split()
+                variants = [raw]
+                if normalized_parts:
+                    no_stop = [part for part in normalized_parts if part not in _stop_tokens]
+                    if no_stop:
+                        variants.append(" ".join(no_stop))
+                    if normalized_parts[0] in _stop_tokens and len(normalized_parts) > 1:
+                        variants.append(" ".join(normalized_parts[1:]))
+                deduped = []
+                seen = set()
+                for variant in variants:
+                    key = variant.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(variant)
+                return deduped
 
             def _resolve_aliases(name):
                 raw = str(name or "").strip()
@@ -1712,11 +1734,31 @@ def create_events_blueprint(
                     return []
                 key = raw.lower()
                 if key in alias_index:
-                    return alias_index[key]
+                    aliases = list(alias_index[key])
+                    aliases.extend(_fallback_aliases(raw))
+                    deduped = []
+                    seen = set()
+                    for alias in aliases:
+                        alias_key = str(alias).strip().lower()
+                        if not alias_key or alias_key in seen:
+                            continue
+                        seen.add(alias_key)
+                        deduped.append(str(alias).strip())
+                    return deduped
                 for candidate_key, candidate_aliases in alias_index.items():
                     if key in candidate_key or candidate_key in key:
-                        return candidate_aliases
-                return [raw]
+                        aliases = list(candidate_aliases)
+                        aliases.extend(_fallback_aliases(raw))
+                        deduped = []
+                        seen = set()
+                        for alias in aliases:
+                            alias_key = str(alias).strip().lower()
+                            if not alias_key or alias_key in seen:
+                                continue
+                            seen.add(alias_key)
+                            deduped.append(str(alias).strip())
+                        return deduped
+                return _fallback_aliases(raw)
 
             for league_key in league_keys:
                 try:

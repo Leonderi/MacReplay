@@ -455,6 +455,9 @@ def init_db(get_portals, logger):
             stream_mode TEXT
         )
     ''')
+    stream_session_cols = {row["name"] for row in cursor.execute("PRAGMA table_info(stream_sessions)").fetchall()}
+    if "startup_ms" not in stream_session_cols:
+        cursor.execute("ALTER TABLE stream_sessions ADD COLUMN startup_ms INTEGER")
 
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_stream_sessions_started

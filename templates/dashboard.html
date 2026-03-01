@@ -68,6 +68,41 @@
 </div>
 
 <div class="row mb-3">
+    <div class="col-md-6 mb-3">
+        <div class="card dashboard-widget-card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-gauge-high"></i> Speedtest (Proxy)</h6>
+                <button class="btn btn-sm btn-outline-info" id="btnRunProxySpeedtest">
+                    <i class="fas fa-vial"></i> Test
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="speedtestProxyLine1" class="dashboard-widget-sub">IP: -</div>
+                <div id="speedtestProxyLine2" class="dashboard-widget-sub mt-1">Latency: -</div>
+                <div id="speedtestProxyLine3" class="dashboard-widget-sub mt-1">Download: -</div>
+                <div id="speedtestProxyLine4" class="dashboard-widget-sub mt-1">Updated: -</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-3">
+        <div class="card dashboard-widget-card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-gauge"></i> Speedtest (Direct)</h6>
+                <button class="btn btn-sm btn-outline-info" id="btnRunDirectSpeedtest">
+                    <i class="fas fa-vial"></i> Test
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="speedtestDirectLine1" class="dashboard-widget-sub">IP: -</div>
+                <div id="speedtestDirectLine2" class="dashboard-widget-sub mt-1">Latency: -</div>
+                <div id="speedtestDirectLine3" class="dashboard-widget-sub mt-1">Download: -</div>
+                <div id="speedtestDirectLine4" class="dashboard-widget-sub mt-1">Updated: -</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
     <div class="col-12">
         <div class="card dashboard-widget-card">
             <div class="card-header">

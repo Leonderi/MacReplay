@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, redirect, render_template, request, flash
 
 from ..security import authorise
+from ..config import get_effective_proxy
 import stb
 from macreplay import xtream
 
@@ -28,6 +29,34 @@ def create_portal_blueprint(
     filter_cache,
 ):
     bp = Blueprint("portal", __name__)
+
+    def _to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _disable_event_channels_for_portal(portal_id):
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE channels
+                   SET enabled = 0
+                 WHERE portal_id = ?
+                   AND COALESCE(is_event, 0) = 1
+                   AND COALESCE(enabled, 0) != 0
+                """,
+                (portal_id,),
+            )
+            changed = int(cursor.rowcount or 0)
+            if changed:
+                conn.commit()
+            return changed
+        finally:
+            conn.close()
 
     def _parse_xtream_credentials(raw_credentials):
         logins = []
@@ -234,7 +263,7 @@ def create_portal_blueprint(
         data = request.get_json(silent=True) or {}
         url = data.get("url")
         mac = data.get("mac")
-        proxy = data.get("proxy") or ""
+        proxy = get_effective_proxy(data.get("proxy") or "", getSettings())
 
         if not url or not mac:
             return jsonify({"success": False, "message": "Portal URL and MAC required"}), 400
@@ -253,7 +282,7 @@ def create_portal_blueprint(
         url = data.get("url")
         username = data.get("username")
         password = data.get("password")
-        proxy = data.get("proxy") or ""
+        proxy = get_effective_proxy(data.get("proxy") or "", getSettings())
         user_agent = data.get("user_agent") or ""
 
         if not url or not username or not password:
@@ -489,13 +518,14 @@ def create_portal_blueprint(
         streamsPerMac = request.form["streams per mac"]
         epgOffset = request.form["epg offset"]
         proxy = request.form["proxy"]
+        effective_proxy = get_effective_proxy(proxy, getSettings())
         fetchEpg = "true" if request.form.get("fetch epg") else "false"
         autoNormalize = "true" if request.form.get("auto normalize names") else "false"
         autoMatch = "true" if request.form.get("auto match") else "false"
         selectedGenres = request.form.getlist("selected_genres")
 
         if not url.endswith(".php"):
-            url = stb.getUrl(url, proxy)
+            url = stb.getUrl(url, effective_proxy)
             if not url:
                 logger.error("Error getting URL for Portal(%s)", name)
                 flash(f"Error getting URL for Portal({name})", "danger")
@@ -509,11 +539,11 @@ def create_portal_blueprint(
         for mac in macs:
             tested_total += 1
             logger.info("Testing MAC(%s) for Portal(%s)...", mac, name)
-            token = stb.getToken(url, mac, proxy)
+            token = stb.getToken(url, mac, effective_proxy)
             if token:
                 logger.debug("Got token for MAC(%s), getting profile and expiry...", mac)
-                profile = stb.getProfile(url, mac, token, proxy)
-                expiry = stb.getExpires(url, mac, token, proxy)
+                profile = stb.getProfile(url, mac, token, effective_proxy)
+                expiry = stb.getExpires(url, mac, token, effective_proxy)
                 if expiry:
                     macsd[mac] = {
                         "expiry": expiry,
@@ -617,6 +647,7 @@ def create_portal_blueprint(
             parsed_logins = [{"username": username, "password": password}]
         user_agent = request.form.get("xtream_user_agent", "").strip()
         proxy = request.form.get("proxy", "").strip()
+        effective_proxy = get_effective_proxy(proxy, getSettings())
         fetchEpg = "true" if request.form.get("fetch epg") else "false"
         autoNormalize = "true" if request.form.get("auto normalize names") else "false"
         autoMatch = "true" if request.form.get("auto match") else "false"
@@ -627,7 +658,7 @@ def create_portal_blueprint(
 
         hydrated_logins = _hydrate_xtream_login_infos(
             url=url,
-            proxy=proxy,
+            proxy=effective_proxy,
             user_agent=user_agent,
             logins=parsed_logins,
         )
@@ -693,6 +724,7 @@ def create_portal_blueprint(
         streamsPerMac = request.form["streams per mac"]
         epgOffset = request.form["epg offset"]
         proxy = request.form["proxy"]
+        effective_proxy = get_effective_proxy(proxy, getSettings())
         fetchEpg = "true" if request.form.get("fetch epg") else "false"
         autoNormalize = "true" if request.form.get("auto normalize names") else "false"
         autoMatch = "true" if request.form.get("auto match") else "false"
@@ -700,7 +732,7 @@ def create_portal_blueprint(
         selectedGenres = request.form.getlist("selected_genres")
 
         if not url.endswith(".php"):
-            url = stb.getUrl(url, proxy)
+            url = stb.getUrl(url, effective_proxy)
             if not url:
                 logger.error("Error getting URL for Portal(%s)", name)
                 flash(f"Error getting URL for Portal({name})", "danger")
@@ -718,13 +750,13 @@ def create_portal_blueprint(
             if retest or mac not in oldmacs.keys():
                 tested_total += 1
                 logger.info("Testing MAC(%s) for Portal(%s)...", mac, name)
-                token = stb.getToken(url, mac, proxy)
+                token = stb.getToken(url, mac, effective_proxy)
                 if token:
                     logger.debug(
                         "Got token for MAC(%s), getting profile and expiry...", mac
                     )
-                    profile = stb.getProfile(url, mac, token, proxy)
-                    expiry = stb.getExpires(url, mac, token, proxy)
+                    profile = stb.getProfile(url, mac, token, effective_proxy)
+                    expiry = stb.getExpires(url, mac, token, effective_proxy)
                     if expiry:
                         macsout[mac] = {
                             "expiry": expiry,
@@ -776,6 +808,8 @@ def create_portal_blueprint(
                 )
 
         if len(macsout) > 0:
+            was_enabled = _to_bool(portals[portal_id].get("enabled", True))
+            is_enabled = _to_bool(enabled)
             portals[portal_id]["enabled"] = enabled
             portals[portal_id]["name"] = name
             portals[portal_id]["type"] = "stalker"
@@ -791,6 +825,14 @@ def create_portal_blueprint(
             portals[portal_id]["auto match"] = autoMatch
             savePortals(portals)
             filter_cache.clear()
+            if was_enabled and not is_enabled:
+                disabled_events = _disable_event_channels_for_portal(portal_id)
+                if disabled_events:
+                    logger.info(
+                        "Portal(%s) disabled: deactivated %s event channel(s).",
+                        name,
+                        disabled_events,
+                    )
             logger.info("Portal(%s) updated!", name)
             flash(f"Portal({name}) updated!", "success")
 
@@ -822,6 +864,7 @@ def create_portal_blueprint(
             parsed_logins = [{"username": username, "password": password}]
         user_agent = request.form.get("xtream_user_agent", "").strip()
         proxy = request.form.get("proxy", "").strip()
+        effective_proxy = get_effective_proxy(proxy, getSettings())
         fetchEpg = "true" if request.form.get("fetch epg") else "false"
         autoNormalize = "true" if request.form.get("auto normalize names") else "false"
         autoMatch = "true" if request.form.get("auto match") else "false"
@@ -836,13 +879,15 @@ def create_portal_blueprint(
 
         hydrated_logins = _hydrate_xtream_login_infos(
             url=url,
-            proxy=proxy,
+            proxy=effective_proxy,
             user_agent=user_agent,
             logins=parsed_logins,
         )
         if not hydrated_logins:
             hydrated_logins = parsed_logins
 
+        was_enabled = _to_bool(portals[portal_id].get("enabled", True))
+        is_enabled = _to_bool(enabled)
         portals[portal_id]["enabled"] = enabled
         portals[portal_id]["name"] = name
         portals[portal_id]["type"] = "xtream"
@@ -858,6 +903,14 @@ def create_portal_blueprint(
         portals[portal_id]["auto match"] = autoMatch
         savePortals(portals)
         filter_cache.clear()
+        if was_enabled and not is_enabled:
+            disabled_events = _disable_event_channels_for_portal(portal_id)
+            if disabled_events:
+                logger.info(
+                    "Xtream Portal(%s) disabled: deactivated %s event channel(s).",
+                    name,
+                    disabled_events,
+                )
         logger.info("Xtream Portal(%s) updated!", name)
         flash(f"Xtream Portal({name}) updated!", "success")
 
@@ -973,7 +1026,7 @@ def create_portal_blueprint(
             if portal.get("type", "stalker") != "stalker":
                 return jsonify({"success": False, "message": "MAC refresh not supported for Xtream portals"}), 400
             url = portal.get("url", "")
-            proxy = portal.get("proxy", "")
+            proxy = get_effective_proxy(portal.get("proxy", ""), getSettings())
             macs = portal.get("macs", {}) or {}
             if not macs:
                 return jsonify({"success": False, "message": "No MACs configured"}), 400
@@ -1043,7 +1096,7 @@ def create_portal_blueprint(
 
             refreshed = _hydrate_xtream_login_infos(
                 url=portal.get("url", ""),
-                proxy=portal.get("proxy", ""),
+                proxy=get_effective_proxy(portal.get("proxy", ""), getSettings()),
                 user_agent=portal.get("xtream user agent", ""),
                 logins=logins,
             )

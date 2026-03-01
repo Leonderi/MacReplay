@@ -179,6 +179,14 @@ defaultSettings = {
     "events auto create interval minutes": 0,
     "events cleanup interval minutes": 5,
     "xtream login check interval minutes": 60,
+    "stalker mac check interval minutes": 0,
+    "speedtest interval minutes": 0,
+    "speedtest provider": "http",
+    "speedtest last proxy result": {},
+    "speedtest last direct result": {},
+    "global proxy enabled": False,
+    "global proxy": "",
+    "global proxy force": False,
 }
 
 defaultPortal = {
@@ -267,3 +275,25 @@ def saveSettings(settings):
     config["settings"] = _coerce_settings(settings)
     with _config_lock, _file_lock():
         _write_config(config)
+
+
+def get_effective_proxy(portal_proxy="", settings=None):
+    """Resolve proxy with optional global override/fallback.
+
+    - If global proxy disabled: use portal proxy.
+    - If enabled + force: always use global proxy.
+    - If enabled without force: use portal proxy when set, else global proxy.
+    """
+    try:
+        resolved_portal_proxy = str(portal_proxy or "").strip()
+    except Exception:
+        resolved_portal_proxy = ""
+    current_settings = settings or getSettings()
+    if not is_true(current_settings.get("global proxy enabled", False)):
+        return resolved_portal_proxy
+    global_proxy = str(current_settings.get("global proxy", "") or "").strip()
+    if not global_proxy:
+        return resolved_portal_proxy
+    if is_true(current_settings.get("global proxy force", False)):
+        return global_proxy
+    return resolved_portal_proxy or global_proxy

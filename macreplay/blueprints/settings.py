@@ -1,9 +1,10 @@
 import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, flash
 
-from ..config import defaultSettings, getSettings, saveSettings
+from ..config import defaultSettings, getSettings, saveSettings, get_effective_proxy
 from ..db import vacuum_channels_db, vacuum_epg_dbs
 from ..security import authorise
+from ..services.speedtest import run_speedtest
 
 logger = logging.getLogger("MacReplay")
 
@@ -89,5 +90,59 @@ def create_settings_blueprint(enqueue_epg_refresh):
             return jsonify({"ok": True, "count": count})
         except Exception as exc:
             return jsonify({"ok": False, "message": str(exc)}), 500
+
+    @bp.route("/api/settings/proxy/test", methods=["POST"])
+    @authorise
+    def proxy_test():
+        payload = request.get_json(silent=True) or {}
+        settings = getSettings()
+        input_proxy = str(payload.get("proxy") or "").strip()
+        effective_proxy = get_effective_proxy(input_proxy, settings)
+        if not effective_proxy:
+            return jsonify({"ok": False, "message": "No proxy configured/effective"}), 400
+        provider = str(payload.get("provider") or settings.get("speedtest provider", "http")).strip().lower()
+        result = run_speedtest(
+            proxy_url=effective_proxy,
+            use_proxy=True,
+            provider=provider,
+        )
+
+        settings["speedtest last proxy result"] = result
+        saveSettings(settings)
+
+        return jsonify(result), (200 if result.get("ok") else 502)
+
+    @bp.route("/api/settings/speedtest/test", methods=["POST"])
+    @authorise
+    def speedtest_test():
+        payload = request.get_json(silent=True) or {}
+        settings = getSettings()
+
+        mode = str(payload.get("mode") or "proxy").strip().lower()
+        if mode not in {"proxy", "direct"}:
+            return jsonify({"ok": False, "message": "Invalid mode"}), 400
+
+        provider = str(payload.get("provider") or settings.get("speedtest provider", "http")).strip().lower()
+        use_proxy = mode == "proxy"
+        effective_proxy = ""
+        if use_proxy:
+            input_proxy = str(payload.get("proxy") or "").strip()
+            effective_proxy = get_effective_proxy(input_proxy, settings)
+            if not effective_proxy:
+                return jsonify({"ok": False, "message": "No proxy configured/effective"}), 400
+
+        result = run_speedtest(
+            proxy_url=effective_proxy,
+            use_proxy=use_proxy,
+            provider=provider,
+        )
+
+        if use_proxy:
+            settings["speedtest last proxy result"] = result
+        else:
+            settings["speedtest last direct result"] = result
+        saveSettings(settings)
+
+        return jsonify(result), (200 if result.get("ok") else 502)
 
     return bp

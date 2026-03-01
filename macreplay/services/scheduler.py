@@ -229,3 +229,67 @@ def start_xtream_logins_scheduler(*, getSettings, logger, refresh_xtream_logins)
 
     threading.Thread(target=xtream_login_loop, daemon=True).start()
     logger.info("Xtream login scheduler started!")
+
+
+def start_stalker_macs_scheduler(*, getSettings, logger, refresh_stalker_macs):
+    """Start scheduler that refreshes stalker MAC status/expiry."""
+
+    def stalker_mac_loop():
+        while True:
+            try:
+                interval_min = float(
+                    getSettings().get("stalker mac check interval minutes", 0) or 0
+                )
+                if interval_min <= 0:
+                    time.sleep(3600)
+                    continue
+
+                logger.info(
+                    "Stalker MAC scheduler: next run in %s minute(s)",
+                    interval_min,
+                )
+                time.sleep(max(60, int(interval_min * 60)))
+                result = refresh_stalker_macs() or {}
+                logger.info(
+                    "Stalker MAC scheduler: done (portals=%s, macs=%s, expired=%s, unreachable=%s).",
+                    result.get("portals", 0),
+                    result.get("macs", 0),
+                    result.get("expired", 0),
+                    result.get("unreachable", 0),
+                )
+            except Exception as exc:
+                logger.error("Stalker MAC scheduler error: %s", exc)
+                time.sleep(300)
+
+    threading.Thread(target=stalker_mac_loop, daemon=True).start()
+    logger.info("Stalker MAC scheduler started!")
+
+
+def start_speedtest_scheduler(*, getSettings, logger, run_speedtests):
+    """Start scheduler that runs proxy/direct speedtests periodically."""
+
+    def speedtest_loop():
+        while True:
+            try:
+                interval_min = float(getSettings().get("speedtest interval minutes", 0) or 0)
+                if interval_min <= 0:
+                    time.sleep(3600)
+                    continue
+
+                logger.info(
+                    "Speedtest scheduler: next run in %s minute(s)",
+                    interval_min,
+                )
+                time.sleep(max(60, int(interval_min * 60)))
+                result = run_speedtests() or {}
+                logger.info(
+                    "Speedtest scheduler: done (proxy_ok=%s, direct_ok=%s).",
+                    result.get("proxy", {}).get("ok"),
+                    result.get("direct", {}).get("ok"),
+                )
+            except Exception as exc:
+                logger.error("Speedtest scheduler error: %s", exc)
+                time.sleep(300)
+
+    threading.Thread(target=speedtest_loop, daemon=True).start()
+    logger.info("Speedtest scheduler started!")

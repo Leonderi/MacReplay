@@ -67,7 +67,31 @@ def create_misc_blueprint(
             "top_reliable_channels": [],
             "status_epg": "unknown",
             "status_streaming": "ok",
+            "speedtest_proxy": None,
+            "speedtest_direct": None,
         }
+
+        def _sanitize_speedtest(payload):
+            if not isinstance(payload, dict):
+                return None
+            return {
+                "ok": bool(payload.get("ok")),
+                "mode": payload.get("mode"),
+                "provider_requested": payload.get("provider_requested") or "http",
+                "provider_used": payload.get("provider_used") or payload.get("provider_requested") or "http",
+                "proxy": payload.get("proxy") or "",
+                "public_ip": payload.get("public_ip") or "",
+                "country_code": payload.get("country_code") or "",
+                "country_name": payload.get("country_name") or "",
+                "country_flag": payload.get("country_flag") or "",
+                "latency_ms": payload.get("latency_ms"),
+                "ip_lookup_ms": payload.get("ip_lookup_ms"),
+                "download_mbps": payload.get("download_mbps"),
+                "download_bytes": payload.get("download_bytes"),
+                "download_ms": payload.get("download_ms"),
+                "message": payload.get("message") or "",
+                "tested_at": payload.get("tested_at"),
+            }
 
         def _parse_dt(value):
             if not value:
@@ -178,6 +202,7 @@ def create_misc_blueprint(
                             "channel_name": stream.get("channel name", "-"),
                             "source_portal_name": stream.get("source portal name", ""),
                             "source_channel_name": stream.get("source channel name", ""),
+                            "source_tags": stream.get("source tags", []) or [],
                             "client": stream.get("client", "-"),
                             "start_time": stream.get("start time", 0),
                         }
@@ -355,6 +380,12 @@ def create_misc_blueprint(
 
         try:
             settings = getSettings() if callable(getSettings) else {}
+            stats["speedtest_proxy"] = _sanitize_speedtest(
+                settings.get("speedtest last proxy result")
+            )
+            stats["speedtest_direct"] = _sanitize_speedtest(
+                settings.get("speedtest last direct result")
+            )
             refresh_hours = float(settings.get("epg update", 2) or 2)
             refresh_hours = max(0.25, refresh_hours)
             last_refresh_dt = _parse_dt(stats["last_epg_refresh"])

@@ -1,8 +1,12 @@
 services:
   macreplay:
-    build: .
+    build:
+      context: .
+      args:
+        INSTALL_OOKLA: "${INSTALL_OOKLA:-false}"
     container_name: macreplay
     environment:
+      INSTALL_OOKLA: "${INSTALL_OOKLA:-false}"
       # User/Group IDs for file permissions
       PUID: "1000"
       PGID: "1000"

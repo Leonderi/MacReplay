@@ -153,6 +153,71 @@
                     0 disables background checks. Invalid Xtream logins (e.g. 403) are marked and deprioritized on stream start.
                 </div>
             </div>
+
+            <div class="mb-3">
+                <label for="stalker_mac_check_interval_minutes" class="form-label">Stalker MAC Check Interval (minutes)</label>
+                <input type="number" class="form-control" id="stalker_mac_check_interval_minutes" name="stalker mac check interval minutes"
+                       value="{{ settings['stalker mac check interval minutes'] }}" min="0" max="1440" step="1">
+                <div class="form-text">
+                    0 disables background checks. Expired/unreachable MACs are marked and skipped for stream selection.
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="speedtest_interval_minutes" class="form-label">Speedtest Interval (minutes)</label>
+                        <input type="number" class="form-control" id="speedtest_interval_minutes" name="speedtest interval minutes"
+                               value="{{ settings.get('speedtest interval minutes', 0) }}" min="0" max="1440" step="1">
+                        <div class="form-text">
+                            0 disables periodic speedtests. Scheduler runs proxy + direct checks.
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="speedtest_provider" class="form-label">Speedtest Provider</label>
+                        <select class="form-select" id="speedtest_provider" name="speedtest provider">
+                            <option value="http" {{ 'selected' if settings.get('speedtest provider', 'http') == 'http' }}>HTTP Probe (10 MiB)</option>
+                            <option value="ookla" {{ 'selected' if settings.get('speedtest provider', 'http') == 'ookla' }}>Ookla CLI (if installed)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <hr>
+            <input type="hidden" name="global proxy enabled" value="false">
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="global_proxy_enabled" name="global proxy enabled"
+                       value="true" {{ 'checked' if settings['global proxy enabled'] }}>
+                <label class="form-check-label" for="global_proxy_enabled">
+                    Enable global proxy for portal requests
+                </label>
+            </div>
+
+            <div class="mb-3">
+                <label for="global_proxy" class="form-label">Global Proxy URL</label>
+                <input type="text" class="form-control" id="global_proxy" name="global proxy"
+                       value="{{ settings['global proxy'] }}" placeholder="http://gluetun:8888">
+                <div class="form-text">Example in same Docker network: <code>http://gluetun:8888</code></div>
+            </div>
+
+            <input type="hidden" name="global proxy force" value="false">
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="global_proxy_force" name="global proxy force"
+                       value="true" {{ 'checked' if settings['global proxy force'] }}>
+                <label class="form-check-label" for="global_proxy_force">
+                    Force global proxy (ignore per-portal proxy)
+                </label>
+            </div>
+
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <button type="button" class="btn btn-outline-info btn-sm" id="testGlobalProxyBtn">
+                    <i class="fas fa-vial"></i> Test Proxy
+                </button>
+                <span id="globalProxyTestStatus" class="small text-muted"></span>
+            </div>
+            <div id="globalProxyTestResult" class="small text-muted"></div>
         </div>
     </div>
 
@@ -341,4 +406,42 @@
         </button>
     </div>
 </form>
+<script>
+(function () {
+    const btn = document.getElementById('testGlobalProxyBtn');
+    if (!btn) return;
+    const statusEl = document.getElementById('globalProxyTestStatus');
+    const resultEl = document.getElementById('globalProxyTestResult');
+    const proxyInput = document.getElementById('global_proxy');
+    const providerInput = document.getElementById('speedtest_provider');
+
+    btn.addEventListener('click', async function () {
+        const proxy = (proxyInput && proxyInput.value ? proxyInput.value : '').trim();
+        const provider = (providerInput && providerInput.value ? providerInput.value : 'http').trim().toLowerCase();
+        statusEl.textContent = 'Testing...';
+        resultEl.textContent = '';
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/settings/proxy/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ proxy, provider })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                statusEl.textContent = 'Failed';
+                resultEl.textContent = data.message || 'Proxy test failed';
+                return;
+            }
+            statusEl.textContent = 'OK';
+            resultEl.textContent = `${data.country_flag || ''} IP: ${data.public_ip || '-'} | Latency: ${data.latency_ms || data.ip_lookup_ms || '-'} ms | Download: ${data.download_mbps || '-'} Mbps`;
+        } catch (e) {
+            statusEl.textContent = 'Failed';
+            resultEl.textContent = String(e);
+        } finally {
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
 {% endblock %}
